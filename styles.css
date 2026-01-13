@@ -1,0 +1,32 @@
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { font-family: -apple-system, system-ui, Arial; margin: 16px; }
+.topbar { display:flex; gap:10px; align-items:center; margin-bottom: 12px; }
+button { padding:10px 12px; border-radius:12px; border:1px solid #cfcfcf; background:#fff; }
+button.primary { font-weight:700; }
+.status { color:#666; font-size:12px; min-height: 16px; }
+
+.view { padding-bottom: 70px; }
+h2 { margin: 16px 0 6px; }
+label { display:block; margin: 10px 0 6px; font-size: 13px; color:#333; }
+input, textarea { width:100%; padding:10px; border-radius:12px; border:1px solid #cfcfcf; }
+textarea { min-height: 110px; }
+.row { display:flex; gap:8px; }
+.row > * { flex: 1; }
+
+.card { border:1px solid #e1e1e1; border-radius:16px; padding:12px; margin:10px 0; }
+.muted { color:#666; font-size: 12px; }
+.pill { display:inline-block; padding:2px 8px; border:1px solid #e1e1e1; border-radius:999px; font-size:12px; margin-right:6px; margin-top:6px; }
+.actions { display:flex; flex-direction:column; gap:8px; min-width:110px; }
+.danger { color:#b00020; border-color:#f0c2c8; }
+
+.bottomnav {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  background: white;
+  border-top: 1px solid #eee;
+  display:flex; gap:8px;
+  padding: 10px 16px;
+}
+.bottomnav button { flex: 1; }
+hr { border:0; border-top:1px solid #eee; margin:12px 0; }
