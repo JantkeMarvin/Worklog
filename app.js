@@ -24,9 +24,11 @@ function openDB() {
     req.onerror = () => reject(req.error);
   });
 }
-function store(mode="readonly") {
+
+function store(mode = "readonly") {
   return db.transaction(STORE, mode).objectStore(STORE);
 }
+
 function getAllJobs() {
   return new Promise((resolve, reject) => {
     const req = store().getAll();
@@ -34,6 +36,7 @@ function getAllJobs() {
     req.onerror = () => reject(req.error);
   });
 }
+
 function putJob(job) {
   return new Promise((resolve, reject) => {
     const req = store("readwrite").put(job);
@@ -41,6 +44,7 @@ function putJob(job) {
     req.onerror = () => reject(req.error);
   });
 }
+
 function deleteJob(id) {
   return new Promise((resolve, reject) => {
     const req = store("readwrite").delete(id);
@@ -62,43 +66,53 @@ function setStatus(msg) {
 function todayISO() {
   const d = new Date();
   const yyyy = d.getFullYear();
-  const mm = String(d.getMonth()+1).padStart(2,"0");
-  const dd = String(d.getDate()).padStart(2,"0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 }
+
 function fmtDate(iso) {
-  const [y,m,d] = iso.split("-");
+  const [y, m, d] = iso.split("-");
   return `${d}.${m}.${y}`;
 }
+
 function toGermanDate(iso) {
-  // iso yyyy-mm-dd -> dd.mm.yyyy
   return fmtDate(iso);
 }
-function escapeHtml(s="") {
+
+function escapeHtml(s = "") {
   return String(s).replace(/[&<>"']/g, (c) => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
   }[c]));
 }
+
 function makeSearchString(job) {
-  // Wichtig: ISO-Datum + deutsches Datum + alle Felder
   const iso = job.date || "";
   const de = iso ? toGermanDate(iso) : "";
   return [iso, de, job.wo, job.tc, job.pn, job.text]
-    .filter(Boolean).join(" ").toLowerCase();
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 }
+
 function uuid() {
   return (crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 }
+
 function groupByDate(jobs) {
   const map = new Map();
   for (const j of jobs) {
     if (!map.has(j.date)) map.set(j.date, []);
     map.get(j.date).push(j);
   }
-  const dates = [...map.keys()].sort((a,b)=> b.localeCompare(a));
+  const dates = [...map.keys()].sort((a, b) => b.localeCompare(a));
   return dates.map(date => ({
     date,
-    items: map.get(date).sort((a,b)=> b.createdAt - a.createdAt)
+    items: map.get(date).sort((a, b) => b.createdAt - a.createdAt)
   }));
 }
 
@@ -112,7 +126,7 @@ async function render() {
   if (currentTab === "search") return renderSearch();
 }
 
-function cardJobInner(job, showDate=false) {
+function cardJobInner(job, showDate = false) {
   return `
     <div style="display:flex;justify-content:space-between;gap:10px;">
       <div>
@@ -123,7 +137,7 @@ function cardJobInner(job, showDate=false) {
           ${job.pn ? `<span class="pill">P/N: ${escapeHtml(job.pn)}</span>` : ``}
         </div>
         ${job.text
-          ? `<div style="margin-top:8px;">${escapeHtml(job.text).replace(/\n/g,"<br>")}</div>`
+          ? `<div style="margin-top:8px;">${escapeHtml(job.text).replace(/\n/g, "<br>")}</div>`
           : `<div class="muted" style="margin-top:8px;">(kein Freitext)</div>`}
       </div>
       <div class="actions">
@@ -133,7 +147,8 @@ function cardJobInner(job, showDate=false) {
     </div>
   `;
 }
-function cardJob(job, showDate=false) {
+
+function cardJob(job, showDate = false) {
   return `<div class="card">${cardJobInner(job, showDate)}</div>`;
 }
 
@@ -148,9 +163,191 @@ function bindCardActions() {
       }
     };
   });
+
   document.querySelectorAll("[data-edit]").forEach(btn => {
     btn.onclick = async () => {
       const id = btn.getAttribute("data-edit");
       const jobs = await getAllJobs();
       const job = jobs.find(j => j.id === id);
-      if (job
+      if (job) renderForm(job);
+    };
+  });
+}
+
+async function renderToday() {
+  const jobs = await getAllJobs();
+  const t = todayISO();
+  const todays = jobs.filter(j => j.date === t).sort((a, b) => b.createdAt - a.createdAt);
+
+  view.innerHTML = `
+    <h2>Heute (${fmtDate(t)})</h2>
+    ${todays.length ? todays.map(j => cardJob(j)).join("") : `<p class="muted">Noch keine Einträge für heute.</p>`}
+  `;
+  bindCardActions();
+}
+
+async function renderDays() {
+  const jobs = await getAllJobs();
+  const grouped = groupByDate(jobs);
+
+  view.innerHTML = `
+    <h2>Alle Tage</h2>
+    ${grouped.length ? grouped.map(g => `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <strong>${fmtDate(g.date)}</strong>
+          <span class="muted">${g.items.length} Auftrag${g.items.length === 1 ? "" : "e"}</span>
+        </div>
+        <hr>
+        ${g.items.map(j => cardJob(j)).join("")}
+      </div>
+    `).join("") : `<p class="muted">Noch keine Einträge vorhanden.</p>`}
+  `;
+  bindCardActions();
+}
+
+async function renderByDate() {
+  const jobs = await getAllJobs();
+  const defaultDate = todayISO();
+
+  view.innerHTML = `
+    <h2>Datum auswählen</h2>
+    <input type="date" id="pickDate" value="${defaultDate}" />
+    <div id="dateResults" style="margin-top:12px;"></div>
+  `;
+
+  const picker = $("#pickDate");
+  const results = $("#dateResults");
+
+  function showForDate(date) {
+    const list = jobs
+      .filter(j => j.date === date)
+      .sort((a, b) => b.createdAt - a.createdAt);
+
+    results.innerHTML = list.length
+      ? list.map(j => cardJob(j)).join("")
+      : `<p class="muted">Keine Einträge für dieses Datum.</p>`;
+
+    bindCardActions();
+  }
+
+  picker.addEventListener("change", () => showForDate(picker.value));
+  showForDate(picker.value);
+}
+
+async function renderSearch() {
+  view.innerHTML = `
+    <h2>Suche</h2>
+    <input id="q" placeholder="Suche nach W/O, T/C, P/N, Text oder Datum (z.B. 2026-01-15 oder 15.01.2026) …" />
+    <div id="results" style="margin-top:10px;"></div>
+  `;
+
+  const input = $("#q");
+  const results = $("#results");
+  const jobs = await getAllJobs();
+
+  function doSearch() {
+    const q = (input.value || "").trim().toLowerCase();
+    if (!q) {
+      results.innerHTML = `<p class="muted">Tippe etwas ein, um zu suchen.</p>`;
+      return;
+    }
+
+    const hits = jobs
+      .filter(j => (j.search || "").includes(q))
+      .sort((a, b) => b.createdAt - a.createdAt);
+
+    results.innerHTML = hits.length
+      ? hits.map(j => cardJob(j, true)).join("")
+      : `<p class="muted">Keine Treffer.</p>`;
+
+    bindCardActions();
+  }
+
+  input.addEventListener("input", doSearch);
+  doSearch();
+}
+
+// ---------- Form (Neu/Bearbeiten) ----------
+function renderForm(existing = null) {
+  const isEdit = !!existing;
+  const d = existing?.date || todayISO();
+
+  view.innerHTML = `
+    <h2>${isEdit ? "Auftrag bearbeiten" : "Neuer Auftrag"}</h2>
+
+    <label>Datum</label>
+    <input id="date" type="date" value="${escapeHtml(d)}" />
+
+    <div class="row">
+      <div>
+        <label>W/O</label>
+        <input id="wo" placeholder="z.B. 123456" value="${escapeHtml(existing?.wo || "")}" />
+      </div>
+      <div>
+        <label>T/C</label>
+        <input id="tc" placeholder="z.B. ABC-01" value="${escapeHtml(existing?.tc || "")}" />
+      </div>
+    </div>
+
+    <label>P/N</label>
+    <input id="pn" placeholder="z.B. 98-7654-321" value="${escapeHtml(existing?.pn || "")}" />
+
+    <label>Durchgeführte Arbeiten (Freitext)</label>
+    <textarea id="text" placeholder="Kurz und klar: was hast du gemacht?">${escapeHtml(existing?.text || "")}</textarea>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="saveBtn" class="primary">${isEdit ? "Speichern" : "Anlegen"}</button>
+      <button id="cancelBtn">Abbrechen</button>
+    </div>
+
+    <p class="muted" style="margin-top:10px;">
+      Tipp: Suche findet auch Datum (ISO 2026-01-15 oder 15.01.2026).
+    </p>
+  `;
+
+  $("#cancelBtn").onclick = () => render();
+
+  $("#saveBtn").onclick = async () => {
+    const job = {
+      id: existing?.id || uuid(),
+      date: $("#date").value || todayISO(),
+      wo: ($("#wo").value || "").trim(),
+      tc: ($("#tc").value || "").trim(),
+      pn: ($("#pn").value || "").trim(),
+      text: ($("#text").value || "").trim(),
+      createdAt: existing?.createdAt || Date.now(),
+      updatedAt: Date.now()
+    };
+
+    if (!job.wo && !job.tc && !job.pn && !job.text) {
+      setStatus("Bitte mindestens ein Feld ausfüllen.");
+      return;
+    }
+
+    job.search = makeSearchString(job);
+    await putJob(job);
+
+    setStatus(isEdit ? "Gespeichert." : "Angelegt.");
+    currentTab = "today";
+    render();
+  };
+}
+
+// ---------- Navigation ----------
+document.querySelectorAll("nav button").forEach(btn => {
+  btn.onclick = () => {
+    currentTab = btn.getAttribute("data-tab");
+    render();
+  };
+});
+
+$("#addBtn").onclick = () => {
+  renderForm(null); // Datum automatisch heute, aber frei änderbar
+};
+
+// ---------- Init ----------
+(async function init() {
+  db = await openDB();
+  render();
+})();
