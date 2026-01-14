@@ -56,15 +56,23 @@ const $ = (q) => document.querySelector(q);
 const view = $("#view");
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
-const uid = () => crypto.randomUUID();
+
+// UUID mit Fallback (iOS-safe)
+function uid() {
+  if (crypto && crypto.randomUUID) return crypto.randomUUID();
+  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
 
 /* -------------------- Similarity -------------------- */
 function similarity(a, b) {
   if (!a || !b) return 0;
   if (a === b) return 1;
 
-  const m = a.length, n = b.length;
-  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  const m = a.length,
+    n = b.length;
+  const dp = Array.from({ length: m + 1 }, () =>
+    Array(n + 1).fill(0)
+  );
 
   for (let i = 0; i <= m; i++) dp[i][0] = i;
   for (let j = 0; j <= n; j++) dp[0][j] = j;
@@ -81,15 +89,7 @@ function similarity(a, b) {
   return 1 - dp[m][n] / Math.max(m, n);
 }
 
-/* -------------------- Matching Logic (SINGLE SOURCE) -------------------- */
-/*
-RULE:
-- If Job has P/N:
-    → P/N must match 100%
-    → AND Notes similarity ≥ 96%
-- If Job has NO P/N:
-    → Notes similarity ≥ 96%
-*/
+/* -------------------- Matching Logic -------------------- */
 function isMatch(todo, job) {
   if (todo.category !== job.category) return false;
 
@@ -108,13 +108,14 @@ function isMatch(todo, job) {
   return similarity(jobNotes, todoNotes) >= 0.96;
 }
 
-/* -------------------- Recheck (CENTRAL) -------------------- */
+/* -------------------- Recheck (CENTRAL & SAFE) -------------------- */
 async function recheckAll() {
   const jobs = await getAll(JOBS);
   const todos = await getAll(TODOS);
 
-  for (const t of todos) t.done = false;
-  for (const j of jobs) j.done = false;
+  // Reset
+  jobs.forEach((j) => (j.done = false));
+  todos.forEach((t) => (t.done = false));
 
   for (const t of todos) {
     const hit = jobs.find((j) => isMatch(t, j));
@@ -130,7 +131,7 @@ async function recheckAll() {
 
 /* -------------------- State -------------------- */
 let state = {
-  view: "today", // today | month | todo | search | settings
+  view: "today", // today | month | todo | settings
   month: new Date().toISOString().slice(0, 7),
 };
 
@@ -230,7 +231,9 @@ async function backup() {
     jobs: await getAll(JOBS),
     todos: await getAll(TODOS),
   };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = "worklog-backup.json";
@@ -238,6 +241,7 @@ async function backup() {
 }
 
 async function restore(file) {
+  if (!file) return;
   const text = await file.text();
   const data = JSON.parse(text);
 
