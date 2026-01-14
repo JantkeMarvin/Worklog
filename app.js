@@ -13,7 +13,7 @@ let db;
 
 function openDB() {
   return new Promise((resolve, reject) => {
-    // v2 introduces "todos" store (keeps existing jobs)
+    // v2 adds TODOS store (keeps existing JOBS)
     const req = indexedDB.open(DB_NAME, 2);
 
     req.onupgradeneeded = () => {
@@ -85,7 +85,6 @@ function normalize(s = "") {
 }
 
 function makeJobSearch(job) {
-  // Include ISO date + EU date + all fields (incl. trainer)
   const iso = job.date || "";
   const de = iso ? fmtDate(iso) : "";
   return [iso, de, job.wo, job.tc, job.pn, job.trainer, job.text]
@@ -161,13 +160,9 @@ function deleteTodo(id) {
 
 // ---------- ToDo matching ----------
 function todoMatchesJob(todo, job) {
-  // Partial match logic:
-  // - compare each field if todo has it
-  // - and also allow free-text matching by substring on combined search strings
   const jobWO = normalize(job.wo);
   const jobTC = normalize(job.tc);
   const jobPN = normalize(job.pn);
-  const jobText = normalize(job.text);
   const jobAll = normalize(job.search || "");
 
   const tWO = normalize(todo.wo);
@@ -176,21 +171,14 @@ function todoMatchesJob(todo, job) {
   const tText = normalize(todo.text);
   const todoAll = normalize(todo.search || "");
 
-  // Field-specific checks (only if todo has that field)
   if (tWO && jobWO && !jobWO.includes(tWO)) return false;
   if (tTC && jobTC && !jobTC.includes(tTC)) return false;
   if (tPN && jobPN && !jobPN.includes(tPN)) return false;
-
-  // If todo has free-text, require it somewhere in jobAll
   if (tText && !jobAll.includes(tText)) return false;
 
-  // If todo has no fields at all, it shouldn't match anything
   if (!tWO && !tTC && !tPN && !tText) return false;
 
-  // Extra: if todoAll exists, allow match if jobAll contains todoAll (useful for single keyword todos)
   if (todoAll && jobAll.includes(todoAll)) return true;
-
-  // If we got here, it's a valid match based on fields above
   return true;
 }
 
@@ -201,7 +189,6 @@ async function applyTodoMatchingForJob(job) {
   const matched = openTodos.filter(t => todoMatchesJob(t, job));
 
   if (!matched.length) {
-    // remove match marker if previously set
     if (job.todoMatched) {
       job.todoMatched = false;
       job.matchedTodoIds = [];
@@ -211,13 +198,11 @@ async function applyTodoMatchingForJob(job) {
     return;
   }
 
-  // mark job as matched
   job.todoMatched = true;
   job.matchedTodoIds = matched.map(t => t.id);
   job.search = makeJobSearch(job);
   await putJob(job);
 
-  // mark todos done (optional: you can change to "not auto-done", but you asked for auto recognition)
   const now = Date.now();
   for (const t of matched) {
     t.done = true;
@@ -351,7 +336,7 @@ async function renderSearch() {
 
   const input = $("#q");
   const results = $("#results");
-  let jobs = await getAllJobs();
+  const jobs = await getAllJobs();
 
   function doSearch() {
     const q = normalize(input.value);
@@ -359,6 +344,7 @@ async function renderSearch() {
       results.innerHTML = `<p class="muted">Type to search.</p>`;
       return;
     }
+
     const hits = jobs
       .filter(j => (j.search || "").includes(q))
       .sort((a, b) => b.createdAt - a.createdAt);
@@ -426,7 +412,7 @@ function bindTodoActions() {
 async function renderTodo() {
   const todos = await getAllTodos();
   const open = todos.filter(t => !t.done).sort((a, b) => b.createdAt - a.createdAt);
-  const done = todos.filter(t => t.done).sort((a, b) => b.doneAt - a.doneAt);
+  const done = todos.filter(t => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
 
   view.innerHTML = `
     <h2>ToDo / OJT List</h2>
@@ -451,7 +437,6 @@ async function renderTodo() {
 
       <div class="row" style="margin-top:12px;">
         <button class="btn primary" id="addTodoBtn">Add ToDo</button>
-        <button class="btn" id="loadSampleBtn">Load sample list</button>
       </div>
 
       <p class="smallnote" style="margin-top:10px;">
@@ -488,36 +473,10 @@ async function renderTodo() {
     render();
   };
 
-  $("#loadSampleBtn").onclick = async () => {
-    const sample = [
-      { wo: "OJT", tc: "INSPECTION", pn: "", text: "perform inspection and document findings" },
-      { wo: "", tc: "TROUBLESHOOT", pn: "", text: "troubleshooting procedure" },
-      { wo: "", tc: "", pn: "P/N", text: "replace part and log serial/batch" }
-    ].map(x => ({
-      id: uuid(),
-      wo: x.wo, tc: x.tc, pn: x.pn, text: x.text,
-      done: false,
-      createdAt: Date.now(),
-      doneAt: null,
-      matchedJobId: null,
-      search: makeTodoSearch(x)
-    }));
-
-    // Insert only if user confirms (avoid duplicates)
-    if (!confirm("Load sample ToDo list?")) return;
-
-    for (const t of sample) {
-      t.search = makeTodoSearch(t);
-      await putTodo(t);
-    }
-    setStatus("Sample list loaded.");
-    render();
-  };
-
   bindTodoActions();
 }
 
-// ---------- Form (New/Edit Job) ----------
+// ---------- Job form ----------
 function renderForm(existing = null) {
   const isEdit = !!existing;
   const d = existing?.date || todayISO();
@@ -552,10 +511,6 @@ function renderForm(existing = null) {
       <button id="saveBtn" class="btn primary">${isEdit ? "Save" : "Create"}</button>
       <button id="cancelBtn" class="btn">Cancel</button>
     </div>
-
-    <p class="muted" style="margin-top:10px;">
-      Tip: Search includes date, W/O, T/C, P/N, Trainer and Notes. Auto ToDo match turns the job green.
-    </p>
   `;
 
   $("#cancelBtn").onclick = () => render();
@@ -582,8 +537,6 @@ function renderForm(existing = null) {
 
     job.search = makeJobSearch(job);
     await putJob(job);
-
-    // Apply ToDo matching AFTER saving
     await applyTodoMatchingForJob(job);
 
     setStatus(isEdit ? "Saved." : "Created.");
@@ -621,12 +574,7 @@ async function backupToFile() {
 
 async function restoreFromJsonText(text) {
   let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    alert("Invalid backup file.");
-    return;
-  }
+  try { data = JSON.parse(text); } catch { alert("Invalid backup file."); return; }
 
   if (!data || !Array.isArray(data.jobs) || !Array.isArray(data.todos)) {
     alert("Backup format not recognized.");
@@ -635,7 +583,6 @@ async function restoreFromJsonText(text) {
 
   if (!confirm("Restore will REPLACE current data. Continue?")) return;
 
-  // Clear stores, then insert
   await new Promise((resolve, reject) => {
     const tx = db.transaction([JOBS, TODOS], "readwrite");
     tx.objectStore(JOBS).clear();
@@ -645,7 +592,6 @@ async function restoreFromJsonText(text) {
   });
 
   for (const j of data.jobs) {
-    // Rebuild search to ensure compatibility
     j.search = makeJobSearch(j);
     await putJob(j);
   }
@@ -657,6 +603,63 @@ async function restoreFromJsonText(text) {
   setStatus("Restore complete.");
   currentTab = "today";
   render();
+}
+
+// ---------- Import ToDo (merge, no overwrite) ----------
+async function importTodos(items) {
+  const existing = await getAllTodos();
+  const existingKeys = new Set(existing.map(t => normalize(t.search || "")));
+
+  const now = Date.now();
+  let added = 0;
+
+  for (const x of items) {
+    const todo = {
+      id: uuid(),
+      wo: (x.wo || "").trim(),
+      tc: (x.tc || "").trim(),
+      pn: (x.pn || "").trim(),
+      text: (x.text || "").trim(),
+      done: false,
+      createdAt: now,
+      doneAt: null,
+      matchedJobId: null
+    };
+    if (!todo.wo && !todo.tc && !todo.pn && !todo.text) continue;
+
+    todo.search = makeTodoSearch(todo);
+    const key = normalize(todo.search);
+
+    if (key && existingKeys.has(key)) continue; // dedupe
+    existingKeys.add(key);
+
+    await putTodo(todo);
+    added++;
+  }
+
+  return added;
+}
+
+function parseCsvTodos(csvText) {
+  // CSV columns: wo,tc,pn,text (header optional)
+  const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return [];
+
+  const h = normalize(lines[0]);
+  const hasHeader = h.includes("wo") && h.includes("tc");
+  const start = hasHeader ? 1 : 0;
+
+  const out = [];
+  for (let i = start; i < lines.length; i++) {
+    const cols = lines[i].split(",").map(c => c.trim());
+    out.push({
+      wo: cols[0] || "",
+      tc: cols[1] || "",
+      pn: cols[2] || "",
+      text: cols.slice(3).join(",") || ""
+    });
+  }
+  return out;
 }
 
 // ---------- Navigation ----------
@@ -682,6 +685,39 @@ $("#restoreInput").addEventListener("change", async (e) => {
   if (!file) return;
   const text = await file.text();
   await restoreFromJsonText(text);
+});
+
+// Import ToDo (merge)
+$("#importTodoBtn").onclick = () => {
+  $("#importTodoInput").value = "";
+  $("#importTodoInput").click();
+};
+
+$("#importTodoInput").addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  const text = await file.text();
+  let items = [];
+
+  if (file.type === "text/csv" || file.name.toLowerCase().endsWith(".csv")) {
+    items = parseCsvTodos(text);
+  } else {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) items = parsed;
+      else if (parsed && Array.isArray(parsed.todos)) items = parsed.todos;
+      else throw new Error("bad");
+    } catch {
+      alert("Invalid ToDo file. Use JSON array or CSV.");
+      return;
+    }
+  }
+
+  const added = await importTodos(items);
+  setStatus(`Imported ToDos: ${added}`);
+  currentTab = "todo";
+  render();
 });
 
 // ---------- Init ----------
