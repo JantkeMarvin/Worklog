@@ -1,57 +1,33 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
 
-  <!-- iOS / Mobile -->
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Worklog">
-
-  <!-- PWA -->
-  <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="apple-touch-icon" href="./icon-192.png">
-
-  <!-- Styling -->
-  <link rel="stylesheet" href="./styles.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <title>Worklog</title>
+
+  <link rel="stylesheet" href="./styles.css">
 </head>
 
 <body>
 
-  <!-- Header -->
-  <header class="app-header">
+  <header>
     <h1>Worklog</h1>
-    <div id="status" class="status"></div>
   </header>
 
-  <!-- Main View -->
   <main id="view">
-    <!-- Rendered dynamically by app.js -->
+    <!-- Content wird von app.js gerendert -->
   </main>
 
-  <!-- Bottom Navigation -->
-  <nav class="bottom-nav">
+  <nav>
     <button data-tab="today">Today</button>
-    <button data-tab="days">All Days</button>
-    <button data-tab="bydate">Date</button>
-    <button data-tab="search">Search</button>
+    <button data-tab="month">Month</button>
     <button data-tab="todo">ToDo</button>
+    <button data-tab="settings">Settings</button>
   </nav>
 
-  <!-- App Logic -->
   <script src="./app.js"></script>
-
-  <!-- Service Worker -->
-  <script>
-    if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register("./sw.js").catch(() => {});
-      });
-    }
-  </script>
 
 </body>
 </html>
