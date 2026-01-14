@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -11,17 +11,21 @@
 </head>
 <body>
   <header class="topbar">
-    <button id="addBtn" class="primary">+ Neuer Auftrag</button>
+    <button id="addBtn" class="btn primary">+ New Job</button>
+    <button id="backupBtn" class="btn">Backup</button>
+    <button id="restoreBtn" class="btn">Restore</button>
+    <input id="restoreInput" type="file" accept="application/json" style="display:none" />
     <div id="status" class="status"></div>
   </header>
 
   <main id="view" class="view"></main>
 
   <nav class="bottomnav">
-    <button data-tab="today">Heute</button>
-    <button data-tab="days">Alle Tage</button>
-    <button data-tab="bydate">Datum</button>
-    <button data-tab="search">Suche</button>
+    <button class="navbtn" data-tab="today">Today</button>
+    <button class="navbtn" data-tab="days">All Days</button>
+    <button class="navbtn" data-tab="bydate">Date</button>
+    <button class="navbtn" data-tab="search">Search</button>
+    <button class="navbtn" data-tab="todo">ToDo</button>
   </nav>
 
   <script src="app.js"></script>
