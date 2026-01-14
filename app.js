@@ -70,13 +70,20 @@ function fmtDate(iso) {
   const [y,m,d] = iso.split("-");
   return `${d}.${m}.${y}`;
 }
+function toGermanDate(iso) {
+  // iso yyyy-mm-dd -> dd.mm.yyyy
+  return fmtDate(iso);
+}
 function escapeHtml(s="") {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[c]));
 }
 function makeSearchString(job) {
-  return [job.date, job.wo, job.tc, job.pn, job.text]
+  // Wichtig: ISO-Datum + deutsches Datum + alle Felder
+  const iso = job.date || "";
+  const de = iso ? toGermanDate(iso) : "";
+  return [iso, de, job.wo, job.tc, job.pn, job.text]
     .filter(Boolean).join(" ").toLowerCase();
 }
 function uuid() {
@@ -101,6 +108,7 @@ let currentTab = "today";
 async function render() {
   if (currentTab === "today") return renderToday();
   if (currentTab === "days") return renderDays();
+  if (currentTab === "bydate") return renderByDate();
   if (currentTab === "search") return renderSearch();
 }
 
@@ -182,10 +190,39 @@ async function renderDays() {
   bindCardActions();
 }
 
+async function renderByDate() {
+  const jobs = await getAllJobs();
+  const defaultDate = todayISO();
+
+  view.innerHTML = `
+    <h2>Datum auswählen</h2>
+    <input type="date" id="pickDate" value="${defaultDate}" />
+    <div id="dateResults" style="margin-top:12px;"></div>
+  `;
+
+  const picker = $("#pickDate");
+  const results = $("#dateResults");
+
+  function showForDate(date) {
+    const list = jobs
+      .filter(j => j.date === date)
+      .sort((a,b) => b.createdAt - a.createdAt);
+
+    results.innerHTML = list.length
+      ? list.map(j => cardJob(j)).join("")
+      : `<p class="muted">Keine Einträge für dieses Datum.</p>`;
+
+    bindCardActions();
+  }
+
+  picker.addEventListener("change", () => showForDate(picker.value));
+  showForDate(picker.value);
+}
+
 async function renderSearch() {
   view.innerHTML = `
     <h2>Suche</h2>
-    <input id="q" placeholder="Suche nach W/O, T/C, P/N oder Text…" />
+    <input id="q" placeholder="Suche nach W/O, T/C, P/N, Text oder Datum (z.B. 2026-01-15 oder 15.01.2026) …" />
     <div id="results" style="margin-top:10px;"></div>
   `;
 
@@ -249,7 +286,7 @@ function renderForm(existing=null) {
     </div>
 
     <p class="muted" style="margin-top:10px;">
-      Tipp: Die Suche findet W/O, T/C, P/N und Stichwörter aus dem Text.
+      Tipp: Suche findet auch Datum (ISO 2026-01-15 oder 15.01.2026).
     </p>
   `;
 
@@ -267,7 +304,6 @@ function renderForm(existing=null) {
       updatedAt: Date.now()
     };
 
-    // Minimal-Validierung: mind. ein Feld außer Datum
     if (!job.wo && !job.tc && !job.pn && !job.text) {
       setStatus("Bitte mindestens ein Feld ausfüllen.");
       return;
@@ -290,7 +326,10 @@ document.querySelectorAll("nav button").forEach(btn => {
   };
 });
 
-$("#addBtn").onclick = () => renderForm(null);
+$("#addBtn").onclick = () => {
+  // Neu erstellen: Datum automatisch heute, aber frei änderbar
+  renderForm(null);
+};
 
 // ---------- Init ----------
 (async function init() {
