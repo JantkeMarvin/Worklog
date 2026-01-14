@@ -1,12 +1,15 @@
 :root{
   --bg:#ffffff;
-  --text:#9a9a9a;        /* light gray */
-  --text-strong:#666666; /* slightly stronger */
+  --text:#9a9a9a;
+  --text-strong:#666666;
   --border:#e9e9e9;
-  --red:#e65050;         /* soft red */
-  --red-soft:#ffe6e6;    /* very light red background */
-  --green-soft:#e7f7ea;  /* light green for matches */
+
+  --red:#e65050;
+  --red-soft:#ffe6e6;
+
+  --green-soft:#e7f7ea;
   --green:#2f9e44;
+
   color-scheme: light;
 }
 
