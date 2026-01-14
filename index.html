@@ -1,37 +1,57 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="theme-color" content="#ffffff" />
+  <meta charset="UTF-8" />
+
+  <!-- iOS / Mobile -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Worklog">
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+
+  <!-- Styling -->
+  <link rel="stylesheet" href="./styles.css">
+
   <title>Worklog</title>
-
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css" />
 </head>
+
 <body>
-  <header class="topbar">
-    <button id="addBtn" class="btn primary">+ New Job</button>
-    <button id="backupBtn" class="btn">Backup</button>
-    <button id="restoreBtn" class="btn">Restore</button>
 
-    <button id="importTodoBtn" class="btn">Import ToDo</button>
-    <input id="restoreInput" type="file" accept="application/json" style="display:none" />
-    <input id="importTodoInput" type="file" accept="application/json,text/csv" style="display:none" />
-
+  <!-- Header -->
+  <header class="app-header">
+    <h1>Worklog</h1>
     <div id="status" class="status"></div>
   </header>
 
-  <main id="view" class="view"></main>
+  <!-- Main View -->
+  <main id="view">
+    <!-- Rendered dynamically by app.js -->
+  </main>
 
-  <nav class="bottomnav">
-    <button class="navbtn" data-tab="today">Today</button>
-    <button class="navbtn" data-tab="days">All Days</button>
-    <button class="navbtn" data-tab="bydate">Date</button>
-    <button class="navbtn" data-tab="search">Search</button>
-    <button class="navbtn" data-tab="todo">ToDo</button>
+  <!-- Bottom Navigation -->
+  <nav class="bottom-nav">
+    <button data-tab="today">Today</button>
+    <button data-tab="days">All Days</button>
+    <button data-tab="bydate">Date</button>
+    <button data-tab="search">Search</button>
+    <button data-tab="todo">ToDo</button>
   </nav>
 
-  <script src="app.js"></script>
+  <!-- App Logic -->
+  <script src="./app.js"></script>
+
+  <!-- Service Worker -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./sw.js").catch(() => {});
+      });
+    }
+  </script>
+
 </body>
 </html>
