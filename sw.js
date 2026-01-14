@@ -1,4 +1,4 @@
-const CACHE = "worklog-v2";
+const CACHE = "worklog-v3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -23,7 +23,6 @@ self.addEventListener("activate", (event) => {
   })());
 });
 
-// Cache-first (Offline), im Hintergrund aktualisieren
 self.addEventListener("fetch", (event) => {
   event.respondWith((async () => {
     const cached = await caches.match(event.request);
