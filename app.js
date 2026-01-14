@@ -272,28 +272,39 @@ function deleteTodo(id) {
 // If JOB has P/N -> ONLY P/N (100% exact after trim+uppercase)
 // If JOB has NO P/N -> ONLY Notes (>=96% similarity; all characters count)
 function todoMatchesJob(todo, job) {
+  // category must match
   if (todo.category && job.category && todo.category !== job.category) return false;
 
   const jobPN = normalizePNExact(job.pn || "");
   const todoPN = normalizePNExact(todo.pn || "");
 
+  const jobNotes = normalizeNotesAllChars(job.text || "");
+  const todoNotes = normalizeNotesAllChars(todo.text || "");
+
+  // If Job has P/N -> REQUIRE: PN exact + notes similarity
   if (jobPN.length > 0) {
     if (!todoPN) return false;
-    return todoPN === jobPN; // 100% match
+    if (todoPN !== jobPN) return false;
+
+    // notes must also be present and match >= 96%
+    if (!jobNotes || !todoNotes) return false;
+
+    const a = todoNotes.slice(0, 1500);
+    const b = jobNotes.slice(0, 1500);
+
+    if (b.includes(a)) return true;
+    return similarityRatio(a, b) >= NOTES_MATCH_THRESHOLD;
   }
 
-  const jobNotes = normalizeNotes(job.text || "");
-  const todoNotes = normalizeNotes(todo.text || "");
+  // If Job has NO P/N -> match ONLY by notes >= 96%
   if (!jobNotes || !todoNotes) return false;
 
-  // prevent huge CPU if someone pastes a novel:
   const a = todoNotes.slice(0, 1500);
   const b = jobNotes.slice(0, 1500);
 
   if (b.includes(a)) return true;
   return similarityRatio(a, b) >= NOTES_MATCH_THRESHOLD;
 }
-
 // When saving a job: match OPEN todos
 async function applyTodoMatchingForJob(job) {
   const todos = (await getAllTodos()).map(ensureCategory);
