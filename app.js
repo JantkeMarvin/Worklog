@@ -1007,3 +1007,28 @@ if ($("#addBtn")) $("#addBtn").onclick = () => renderForm(null);
 
   render();
 })();
+// ===== FIX: Buttons immer aktiv (auch nach neuem Render) =====
+document.addEventListener("click", (e) => {
+
+  // Tabs unten (Today / All Days / Date / Search / ToDo)
+  const tabBtn = e.target.closest("button[data-tab]");
+  if (tabBtn) {
+    currentTab = tabBtn.dataset.tab;
+    render();
+    return;
+  }
+
+  // + New Job Button
+  if (e.target.closest("#addJobBtn")) {
+    renderJobForm();
+    return;
+  }
+
+  // + New ToDo Button
+  if (e.target.closest("#addTodoBtn")) {
+    renderTodoForm();
+    return;
+  }
+});
+
+
