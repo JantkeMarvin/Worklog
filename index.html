@@ -1,37 +1,32 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="de">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#ffffff" />
   <title>Worklog</title>
 
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="manifest" href="manifest.webmanifest">
+  <!-- optional, falls du später ein Icon ergänzt:
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  -->
 
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="styles.css" />
 </head>
-
 <body>
-
-  <header class="app-header">
-    <h1>Worklog</h1>
-
-    <div class="top-actions">
-      <button data-action="new-job">+ New Job</button>
-      <button data-action="new-todo">+ New ToDo</button>
-    </div>
+  <header class="topbar">
+    <button id="addBtn" class="primary">+ Neuer Auftrag</button>
+    <div id="status" class="status"></div>
   </header>
 
-  <main id="view">
-    <!-- Content wird komplett von app.js gerendert -->
-  </main>
+  <main id="view" class="view"></main>
 
-  <nav class="bottom-nav">
-    <button data-tab="today">Today</button>
-    <button data-tab="month">Month</button>
-    <button data-tab="todo">ToDo</button>
-    <button data-tab="settings">Settings</button>
+  <nav class="bottomnav">
+    <button data-tab="today">Heute</button>
+    <button data-tab="days">Alle Tage</button>
+    <button data-tab="search">Suche</button>
   </nav>
 
-  <script src="./app.js"></script>
-
+  <script src="app.js"></script>
 </body>
 </html>
