@@ -1,4 +1,4 @@
-const CACHE_VERSION = "worklog-cache-v999"; // <-- JEDES Update hochzählen!
+const CACHE_VERSION = "worklog-cache-v120"; // <-- JEDES Update hochzählen!
 const ASSETS = [
   "./",
   "./index.html",
