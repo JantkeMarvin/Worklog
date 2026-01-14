@@ -1,35 +1,36 @@
-// ---------- PWA / Service Worker ----------
+/* =========================================================
+   WORKLOG / OJT TRACKER (Stable)
+   - Offline (IndexedDB)
+   - Simple Views: Today / Month / ToDo / Settings
+   - Header Buttons always work: + New Job / + New ToDo
+   ========================================================= */
+
+/* -------------------- Service Worker -------------------- */
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", async () => {
-    try { await navigator.serviceWorker.register("./sw.js"); } catch (_) {}
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
   });
 }
 
-// ---------- IndexedDB ----------
+/* -------------------- IndexedDB -------------------- */
 const DB_NAME = "worklog_db";
+const DB_VERSION = 1;
 const JOBS = "jobs";
 const TODOS = "todos";
+
 let db;
 
 function openDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 3);
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
 
     req.onupgradeneeded = () => {
       const d = req.result;
-
       if (!d.objectStoreNames.contains(JOBS)) {
-        const s = d.createObjectStore(JOBS, { keyPath: "id" });
-        s.createIndex("date", "date");
-        s.createIndex("createdAt", "createdAt");
-        s.createIndex("search", "search");
+        d.createObjectStore(JOBS, { keyPath: "id" });
       }
-
       if (!d.objectStoreNames.contains(TODOS)) {
-        const t = d.createObjectStore(TODOS, { keyPath: "id" });
-        t.createIndex("createdAt", "createdAt");
-        t.createIndex("done", "done");
-        t.createIndex("search", "search");
+        d.createObjectStore(TODOS, { keyPath: "id" });
       }
     };
 
@@ -42,1020 +43,402 @@ function store(name, mode = "readonly") {
   return db.transaction(name, mode).objectStore(name);
 }
 
-// ---------- Constants ----------
-const CATEGORIES = ["CLS", "INT"];
-const CAT_FILTERS = ["ALL", "CLS", "INT"];
+function getAll(name) {
+  return new Promise((res, rej) => {
+    try {
+      const r = store(name).getAll();
+      r.onsuccess = () => res(r.result || []);
+      r.onerror = () => rej(r.error);
+    } catch (e) {
+      rej(e);
+    }
+  });
+}
 
-// ---------- DOM helpers ----------
-const $ = (sel) => document.querySelector(sel);
+function put(name, obj) {
+  return new Promise((res, rej) => {
+    try {
+      const r = store(name, "readwrite").put(obj);
+      r.onsuccess = () => res();
+      r.onerror = () => rej(r.error);
+    } catch (e) {
+      rej(e);
+    }
+  });
+}
+
+function del(name, id) {
+  return new Promise((res, rej) => {
+    try {
+      const r = store(name, "readwrite").delete(id);
+      r.onsuccess = () => res();
+      r.onerror = () => rej(r.error);
+    } catch (e) {
+      rej(e);
+    }
+  });
+}
+
+/* -------------------- Helpers -------------------- */
+const $ = (q) => document.querySelector(q);
 const view = $("#view");
-const statusEl = $("#status");
 
-// ---------- Status ----------
-function setStatus(msg) {
-  if (!statusEl) return;
-  statusEl.textContent = msg || "";
-  if (msg) setTimeout(() => {
-    if (statusEl.textContent === msg) statusEl.textContent = "";
-  }, 2200);
+const todayISO = () => new Date().toISOString().slice(0, 10);
+
+function uid() {
+  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
-// ---------- Date helpers ----------
-function todayISO() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+function safeStr(v) {
+  return (v ?? "").toString().trim();
 }
 
-function currentMonthISO() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${yyyy}-${mm}`;
-}
+/* -------------------- Similarity (Notes) -------------------- */
+function similarity(a, b) {
+  a = safeStr(a);
+  b = safeStr(b);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
 
-function fmtDate(iso) {
-  if (!iso) return "";
-  const [y, m, d] = iso.split("-");
-  return `${d}.${m}.${y}`;
-}
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
 
-function fmtMonth(ym) {
-  if (!ym) return "";
-  const [y, m] = ym.split("-");
-  return `${m}.${y}`;
-}
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
 
-// ---------- Misc helpers ----------
-function escapeHtml(s = "") {
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;"
-  }[c]));
-}
-
-function uuid() {
-  return (crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
-}
-
-function normalize(s = "") {
-  return String(s).trim().toLowerCase();
-}
-
-function ensureCategory(x) {
-  if (!x.category) x.category = "CLS";
-  if (!CATEGORIES.includes(x.category)) x.category = "CLS";
-  return x;
-}
-
-function categorySelect(id, value) {
-  const v = CATEGORIES.includes(value) ? value : "CLS";
-  const opts = CATEGORIES.map(c => `<option value="${c}" ${v === c ? "selected" : ""}>${c}</option>`).join("");
-  return `<select id="${id}">${opts}</select>`;
-}
-
-function categoryPill(cat) {
-  return cat ? `<span class="pill">CAT: ${escapeHtml(cat)}</span>` : "";
-}
-
-function applyCatFilter(list, filter) {
-  if (!filter || filter === "ALL") return list;
-  return list.filter(x => (x.category || "CLS") === filter);
-}
-
-function renderCatToggle(current, prefix) {
-  const btn = (val) => `
-    <button class="btn ${current === val ? "primary" : ""}" id="${prefix}_${val}">${val}</button>
-  `;
-  return `
-    <div class="card">
-      <strong style="color:var(--text-strong)">Filter</strong>
-      <div class="row" style="margin-top:10px;">
-        ${btn("ALL")}
-        ${btn("CLS")}
-        ${btn("INT")}
-      </div>
-    </div>
-  `;
-}
-
-function bindCatToggle(prefix, onChange) {
-  for (const f of CAT_FILTERS) {
-    const el = $(`#${prefix}_${f}`);
-    if (el) el.onclick = () => onChange(f);
-  }
-}
-
-// ---------- Similarity (Levenshtein) ----------
-function levenshtein(a, b) {
-  if (a === b) return 0;
-  const al = a.length, bl = b.length;
-  if (al === 0) return bl;
-  if (bl === 0) return al;
-
-  const dp = new Array(bl + 1);
-  for (let j = 0; j <= bl; j++) dp[j] = j;
-
-  for (let i = 1; i <= al; i++) {
-    let prev = dp[0];
-    dp[0] = i;
-    for (let j = 1; j <= bl; j++) {
-      const tmp = dp[j];
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[j] = Math.min(
-        dp[j] + 1,
-        dp[j - 1] + 1,
-        prev + cost
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
       );
-      prev = tmp;
     }
   }
-  return dp[bl];
+  return 1 - dp[m][n] / Math.max(m, n);
 }
 
-function similarityRatio(a, b) {
-  const maxLen = Math.max(a.length, b.length);
-  if (maxLen === 0) return 1;
-  const dist = levenshtein(a, b);
-  return 1 - dist / maxLen;
-}
+/* -------------------- Matching Rule -------------------- */
+/*
+RULE:
+- Categories must match
+- If Job has P/N:
+    → P/N must match 100%
+    → AND Notes similarity >= 0.96 (both notes must exist)
+- If Job has NO P/N:
+    → Notes similarity >= 0.96
+*/
+function isMatch(todo, job) {
+  if (safeStr(todo.category) !== safeStr(job.category)) return false;
 
-const NOTES_MATCH_THRESHOLD = 0.96;
+  const jobPN = safeStr(job.pn);
+  const todoPN = safeStr(todo.pn);
+  const jobNotes = safeStr(job.notes);
+  const todoNotes = safeStr(todo.notes);
 
-function normalizePNExact(s = "") {
-  // 100% match but case-insensitive + trim
-  return String(s).trim().toUpperCase();
-}
-
-function normalizeNotesAllChars(s = "") {
-  // include EVERYTHING, only trim ends
-  return String(s).trim();
-}
-
-// ---------- Search fields ----------
-function makeJobSearch(job) {
-  const iso = job.date || "";
-  const de = iso ? fmtDate(iso) : "";
-  return [iso, de, job.category, job.wo, job.tc, job.pn, job.trainer, job.text]
-    .filter(Boolean).join(" ").toLowerCase();
-}
-
-function makeTodoSearch(todo) {
-  return [todo.category, todo.wo, todo.tc, todo.pn, todo.text]
-    .filter(Boolean).join(" ").toLowerCase();
-}
-
-function groupByDate(jobs) {
-  const map = new Map();
-  for (const j of jobs) {
-    if (!map.has(j.date)) map.set(j.date, []);
-    map.get(j.date).push(j);
-  }
-  const dates = [...map.keys()].sort((a, b) => b.localeCompare(a));
-  return dates.map(date => ({
-    date,
-    items: map.get(date).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-  }));
-}
-
-// ---------- DB access ----------
-function getAllJobs() {
-  return new Promise((resolve, reject) => {
-    const req = store(JOBS).getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function putJob(job) {
-  return new Promise((resolve, reject) => {
-    const req = store(JOBS, "readwrite").put(job);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function deleteJob(id) {
-  return new Promise((resolve, reject) => {
-    const req = store(JOBS, "readwrite").delete(id);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function getAllTodos() {
-  return new Promise((resolve, reject) => {
-    const req = store(TODOS).getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function putTodo(todo) {
-  return new Promise((resolve, reject) => {
-    const req = store(TODOS, "readwrite").put(todo);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function deleteTodo(id) {
-  return new Promise((resolve, reject) => {
-    const req = store(TODOS, "readwrite").delete(id);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
-
-// =========================================================
-// ✅ MATCHING (DEINE NEUE REGEL)
-// - If Job has P/N -> require BOTH: PN exact (100%) AND Notes >=96%
-// - If Job has NO P/N -> match ONLY by Notes >=96%
-// Notes compare includes ALL chars (no filtering)
-// =========================================================
-function todoMatchesJob(todo, job) {
-  if ((todo.category || "CLS") !== (job.category || "CLS")) return false;
-
-  const jobPN = normalizePNExact(job.pn || "");
-  const todoPN = normalizePNExact(todo.pn || "");
-
-  const jobNotes = normalizeNotesAllChars(job.text || "");
-  const todoNotes = normalizeNotesAllChars(todo.text || "");
-
-  // Case 1: Job has PN -> PN exact + Notes >= 96%
-  if (jobPN.length > 0) {
-    if (!todoPN) return false;
-    if (todoPN !== jobPN) return false; // 100% match
-
+  if (jobPN) {
+    if (jobPN !== todoPN) return false;
     if (!jobNotes || !todoNotes) return false;
-
-    const a = todoNotes.slice(0, 1500);
-    const b = jobNotes.slice(0, 1500);
-
-    if (b.includes(a)) return true;
-    return similarityRatio(a, b) >= NOTES_MATCH_THRESHOLD;
+    return similarity(jobNotes, todoNotes) >= 0.96;
   }
 
-  // Case 2: Job has NO PN -> Notes only (>=96)
   if (!jobNotes || !todoNotes) return false;
-
-  const a = todoNotes.slice(0, 1500);
-  const b = jobNotes.slice(0, 1500);
-
-  if (b.includes(a)) return true;
-  return similarityRatio(a, b) >= NOTES_MATCH_THRESHOLD;
-}
-
-// ---------- Matching apply (both directions) ----------
-async function applyTodoMatchingForJob(job) {
-  const todos = (await getAllTodos()).map(ensureCategory);
-  const openTodos = todos.filter(t => !t.done);
-
-  const matched = openTodos.filter(t => todoMatchesJob(t, job));
-  if (!matched.length) return;
-
-  job.todoMatched = true;
-  job.matchedTodoIds = Array.from(new Set([...(job.matchedTodoIds || []), ...matched.map(t => t.id)]));
-  job.search = makeJobSearch(job);
-  await putJob(job);
-
-  const now = Date.now();
-  for (const t of matched) {
-    t.done = true;
-    t.doneAt = now;
-    t.matchedJobId = job.id;
-    t.search = makeTodoSearch(t);
-    await putTodo(t);
-  }
-}
-
-async function applyJobMatchingForTodo(todo) {
-  if (todo.done) return;
-
-  const jobs = (await getAllJobs()).map(ensureCategory);
-  const candidates = jobs
-    .filter(j => (j.category || "CLS") === (todo.category || "CLS"))
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-
-  const match = candidates.find(j => todoMatchesJob(todo, j));
-  if (!match) return;
-
-  todo.done = true;
-  todo.doneAt = Date.now();
-  todo.matchedJobId = match.id;
-  todo.search = makeTodoSearch(todo);
-  await putTodo(todo);
-
-  match.todoMatched = true;
-  match.matchedTodoIds = Array.from(new Set([...(match.matchedTodoIds || []), todo.id]));
-  match.search = makeJobSearch(match);
-  await putJob(match);
+  return similarity(jobNotes, todoNotes) >= 0.96;
 }
 
 async function recheckAll() {
-  setStatus("Recheck running…");
+  const jobs = await getAll(JOBS);
+  const todos = await getAll(TODOS);
 
-  const jobs = (await getAllJobs()).map(ensureCategory);
-  const todos = (await getAllTodos()).map(ensureCategory);
+  jobs.forEach((j) => (j.done = false));
+  todos.forEach((t) => (t.done = false));
 
-  // refresh search strings
-  for (const j of jobs) { j.search = makeJobSearch(j); await putJob(j); }
-  for (const t of todos) { t.search = makeTodoSearch(t); await putTodo(t); }
-
-  // open todos -> jobs
-  const openTodos = (await getAllTodos()).map(ensureCategory).filter(t => !t.done);
-  for (const t of openTodos) await applyJobMatchingForTodo(t);
-
-  // jobs -> remaining open todos
-  const jobs2 = (await getAllJobs()).map(ensureCategory);
-  for (const j of jobs2) {
-    const remaining = (await getAllTodos()).map(ensureCategory).filter(t => !t.done);
-    if (!remaining.length) break;
-    await applyTodoMatchingForJob(j);
+  for (const t of todos) {
+    const hit = jobs.find((j) => isMatch(t, j));
+    if (hit) {
+      t.done = true;
+      hit.done = true;
+    }
   }
 
-  setStatus("Recheck done.");
+  for (const j of jobs) await put(JOBS, j);
+  for (const t of todos) await put(TODOS, t);
+}
+
+/* -------------------- State -------------------- */
+let state = {
+  tab: "today",  // today | month | todo | settings
+  month: new Date().toISOString().slice(0, 7),
+};
+
+/* -------------------- Rendering -------------------- */
+async function render() {
+  if (state.tab === "today") return renderToday();
+  if (state.tab === "month") return renderMonth();
+  if (state.tab === "todo") return renderTodo();
+  if (state.tab === "settings") return renderSettings();
+}
+
+function renderJobCard(j) {
+  return `
+    <div class="card ${j.done ? "done" : ""}">
+      <div><b>${safeStr(j.category)}</b> ${safeStr(j.pn)}</div>
+      <div style="color:#888;margin-top:6px;white-space:pre-wrap;">${safeStr(j.notes)}</div>
+      <div style="margin-top:8px;">
+        <button data-action="delete-job" data-id="${j.id}">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderTodoCard(t) {
+  return `
+    <div class="card ${t.done ? "done" : ""}">
+      <div><b>${safeStr(t.category)}</b> ${safeStr(t.pn)}</div>
+      <div style="color:#888;margin-top:6px;white-space:pre-wrap;">${safeStr(t.notes)}</div>
+      <div style="margin-top:8px;">
+        <button data-action="delete-todo" data-id="${t.id}">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+async function renderToday() {
+  const jobs = await getAll(JOBS);
+  const today = todayISO();
+  const list = jobs.filter((j) => j.date === today);
+
+  view.innerHTML = `
+    <h2>Today (${today.split("-").reverse().join(".")})</h2>
+    ${list.length ? list.map(renderJobCard).join("") : `<p style="color:#999;">No entries for today.</p>`}
+  `;
+}
+
+async function renderMonth() {
+  const jobs = await getAll(JOBS);
+  const list = jobs.filter((j) => safeStr(j.date).startsWith(state.month));
+
+  view.innerHTML = `
+    <h2>Month</h2>
+    <input type="month" value="${state.month}" data-action="pick-month">
+    <div style="margin-top:12px;">
+      ${list.length ? list.map(renderJobCard).join("") : `<p style="color:#999;">No entries in this month.</p>`}
+    </div>
+  `;
+}
+
+async function renderTodo() {
+  const todos = await getAll(TODOS);
+  const open = todos.filter((t) => !t.done);
+  const done = todos.filter((t) => t.done);
+
+  view.innerHTML = `
+    <h2>ToDo / OJT</h2>
+
+    <h3>Open</h3>
+    ${open.length ? open.map(renderTodoCard).join("") : `<p style="color:#999;">None</p>`}
+
+    <h3>Done</h3>
+    ${done.length ? done.map(renderTodoCard).join("") : `<p style="color:#999;">None</p>`}
+  `;
+}
+
+function renderSettings() {
+  view.innerHTML = `
+    <h2>Settings</h2>
+    <button data-action="backup">Backup</button>
+    <button data-action="restore">Restore</button>
+    <button data-action="recheck">Recheck All</button>
+    <input type="file" id="restoreFile" accept="application/json" hidden>
+  `;
+}
+
+/* -------------------- Forms -------------------- */
+function jobForm() {
+  view.innerHTML = `
+    <h2>New Job</h2>
+    <label>Category</label>
+    <select id="jcat">
+      <option value="CLS">CLS</option>
+      <option value="INT">INT</option>
+    </select>
+
+    <label style="display:block;margin-top:10px;">P/N</label>
+    <input id="jpn" placeholder="P/N">
+
+    <label style="display:block;margin-top:10px;">Notes</label>
+    <textarea id="jnotes" placeholder="Notes"></textarea>
+
+    <div style="margin-top:12px;display:flex;gap:10px;">
+      <button data-action="save-job">Create</button>
+      <button data-action="cancel">Cancel</button>
+    </div>
+  `;
+}
+
+function todoForm() {
+  view.innerHTML = `
+    <h2>New ToDo</h2>
+    <label>Category</label>
+    <select id="tcat">
+      <option value="CLS">CLS</option>
+      <option value="INT">INT</option>
+    </select>
+
+    <label style="display:block;margin-top:10px;">P/N</label>
+    <input id="tpn" placeholder="P/N">
+
+    <label style="display:block;margin-top:10px;">Notes</label>
+    <textarea id="tnotes" placeholder="Notes"></textarea>
+
+    <div style="margin-top:12px;display:flex;gap:10px;">
+      <button data-action="save-todo">Create</button>
+      <button data-action="cancel">Cancel</button>
+    </div>
+  `;
+}
+
+/* -------------------- Backup / Restore -------------------- */
+async function backup() {
+  const data = {
+    jobs: await getAll(JOBS),
+    todos: await getAll(TODOS),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "worklog-backup.json";
+  a.click();
+}
+
+async function restore(file) {
+  if (!file) return;
+  const text = await file.text();
+  const data = JSON.parse(text);
+
+  // overwrite existing by putting same IDs; user can clear manually if needed
+  for (const j of data.jobs || []) await put(JOBS, j);
+  for (const t of data.todos || []) await put(TODOS, t);
+
+  await recheckAll();
   render();
 }
 
-// ---------- UI state ----------
-let currentTab = "today"; // today | days | bydate | search | todo | settings
-let dateMode = "day";     // day | month
-let jobsCatFilter = "ALL";
-let todoCatFilter = "ALL";
+/* -------------------- Global Click Handler -------------------- */
+document.addEventListener("click", async (e) => {
+  const action = e.target?.dataset?.action;
+  const tab = e.target?.dataset?.tab;
 
-// ---------- Cards ----------
-function cardJob(job, showDate = false) {
-  const matchClass = job.todoMatched ? "card match" : "card";
-  return `
-    <div class="${matchClass}">
-      <div style="display:flex;justify-content:space-between;gap:10px;">
-        <div>
-          ${showDate ? `<div class="muted">${fmtDate(job.date)}</div>` : ``}
-          <div>
-            ${job.todoMatched ? `<span class="pill done">OJT MATCH</span>` : ``}
-            ${categoryPill(job.category)}
-            ${job.wo ? `<span class="pill">W/O: ${escapeHtml(job.wo)}</span>` : ``}
-            ${job.tc ? `<span class="pill">T/C: ${escapeHtml(job.tc)}</span>` : ``}
-            ${job.pn ? `<span class="pill">P/N: ${escapeHtml(job.pn)}</span>` : ``}
-            ${job.trainer ? `<span class="pill">Trainer: ${escapeHtml(job.trainer)}</span>` : ``}
-          </div>
-          ${job.text
-            ? `<div style="margin-top:8px;">${escapeHtml(job.text).replace(/\n/g, "<br>")}</div>`
-            : `<div class="muted" style="margin-top:8px;">(no notes)</div>`}
-        </div>
-        <div class="actions">
-          <button class="btn" data-edit="${job.id}">Edit</button>
-          <button class="btn danger" data-del="${job.id}">Delete</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function todoCard(todo) {
-  const doneBadge = todo.done ? `<span class="pill done">DONE</span>` : `<span class="pill">OPEN</span>`;
-  const text = todo.text ? escapeHtml(todo.text) : `<span class="muted">(no notes)</span>`;
-  return `
-    <div class="card ${todo.done ? "match" : ""}">
-      <div style="display:flex;justify-content:space-between;gap:10px;">
-        <div>
-          <div>
-            ${doneBadge}
-            ${categoryPill(todo.category)}
-          </div>
-          <div style="margin-top:6px;">
-            ${todo.wo ? `<span class="pill">W/O: ${escapeHtml(todo.wo)}</span>` : ``}
-            ${todo.tc ? `<span class="pill">T/C: ${escapeHtml(todo.tc)}</span>` : ``}
-            ${todo.pn ? `<span class="pill">P/N: ${escapeHtml(todo.pn)}</span>` : ``}
-          </div>
-          <div style="margin-top:8px;">${text}</div>
-        </div>
-        <div class="actions">
-          ${!todo.done ? `<button class="btn" data-tododone="${todo.id}">Mark Done</button>` : ``}
-          <button class="btn danger" data-tododel="${todo.id}">Delete</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-// ---------- Bind actions ----------
-function bindJobActions() {
-  document.querySelectorAll("[data-del]").forEach(btn => {
-    btn.onclick = async () => {
-      const id = btn.getAttribute("data-del");
-      if (confirm("Delete this entry?")) {
-        await deleteJob(id);
-        setStatus("Deleted.");
-        render();
-      }
-    };
-  });
-
-  document.querySelectorAll("[data-edit]").forEach(btn => {
-    btn.onclick = async () => {
-      const id = btn.getAttribute("data-edit");
-      const jobs = (await getAllJobs()).map(ensureCategory);
-      const job = jobs.find(j => j.id === id);
-      if (job) renderJobForm(job);
-    };
-  });
-}
-
-function bindTodoActions() {
-  document.querySelectorAll("[data-tododel]").forEach(btn => {
-    btn.onclick = async () => {
-      const id = btn.getAttribute("data-tododel");
-      if (confirm("Delete this ToDo?")) {
-        await deleteTodo(id);
-        setStatus("Deleted.");
-        render();
-      }
-    };
-  });
-
-  document.querySelectorAll("[data-tododone]").forEach(btn => {
-    btn.onclick = async () => {
-      const id = btn.getAttribute("data-tododone");
-      const todos = (await getAllTodos()).map(ensureCategory);
-      const t = todos.find(x => x.id === id);
-      if (!t) return;
-      t.done = true;
-      t.doneAt = Date.now();
-      t.search = makeTodoSearch(t);
-      await putTodo(t);
-      setStatus("Marked done.");
-      render();
-    };
-  });
-}
-
-// ---------- Render Tabs ----------
-async function render() {
-  if (currentTab === "today") return renderToday();
-  if (currentTab === "days") return renderDays();
-  if (currentTab === "bydate") return renderByDate();
-  if (currentTab === "search") return renderSearch();
-  if (currentTab === "todo") return renderTodo();
-  if (currentTab === "settings") return renderSettings();
-}
-
-// TODAY
-async function renderToday() {
-  const jobs = (await getAllJobs()).map(ensureCategory);
-  const t = todayISO();
-  const todaysAll = jobs.filter(j => j.date === t);
-  const todays = applyCatFilter(todaysAll, jobsCatFilter).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-
-  view.innerHTML = `
-    <h2>Today (${fmtDate(t)})</h2>
-    ${renderCatToggle(jobsCatFilter, "jobfilter_today")}
-    ${todays.length ? todays.map(cardJob).join("") : `<p class="muted">No entries for this filter.</p>`}
-  `;
-  bindCatToggle("jobfilter_today", (f) => { jobsCatFilter = f; renderToday(); });
-  bindJobActions();
-}
-
-// ALL DAYS
-async function renderDays() {
-  const jobs = (await getAllJobs()).map(ensureCategory);
-  const filtered = applyCatFilter(jobs, jobsCatFilter);
-  const grouped = groupByDate(filtered);
-
-  view.innerHTML = `
-    <h2>All Days</h2>
-    ${renderCatToggle(jobsCatFilter, "jobfilter_days")}
-    ${grouped.length ? grouped.map(g => `
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <strong style="color:var(--text-strong)">${fmtDate(g.date)}</strong>
-          <span class="muted">${g.items.length} job${g.items.length === 1 ? "" : "s"}</span>
-        </div>
-        <hr>
-        ${g.items.map(cardJob).join("")}
-      </div>
-    `).join("") : `<p class="muted">No entries for this filter.</p>`}
-  `;
-  bindCatToggle("jobfilter_days", (f) => { jobsCatFilter = f; renderDays(); });
-  bindJobActions();
-}
-
-// DATE (DAY/MONTH)
-async function renderByDate() {
-  const jobs = (await getAllJobs()).map(ensureCategory);
-  const defaultDay = todayISO();
-  const defaultMonth = currentMonthISO();
-
-  view.innerHTML = `
-    <h2>Date</h2>
-    ${renderCatToggle(jobsCatFilter, "jobfilter_date")}
-
-    <div class="card">
-      <strong style="color:var(--text-strong)">Mode</strong>
-      <div class="row" style="margin-top:10px;">
-        <button class="btn ${dateMode === "day" ? "primary" : ""}" id="modeDayBtn">Day</button>
-        <button class="btn ${dateMode === "month" ? "primary" : ""}" id="modeMonthBtn">Month</button>
-      </div>
-
-      <div id="dayWrap" style="margin-top:12px; ${dateMode === "day" ? "" : "display:none;"}">
-        <label>Select day</label>
-        <input type="date" id="pickDay" value="${defaultDay}" />
-      </div>
-
-      <div id="monthWrap" style="margin-top:12px; ${dateMode === "month" ? "" : "display:none;"}">
-        <label>Select month</label>
-        <input type="month" id="pickMonth" value="${defaultMonth}" />
-      </div>
-    </div>
-
-    <div id="dateResults" style="margin-top:12px;"></div>
-  `;
-
-  bindCatToggle("jobfilter_date", (f) => { jobsCatFilter = f; renderByDate(); });
-
-  const results = $("#dateResults");
-
-  function showForDay(dayIso) {
-    const listAll = jobs.filter(j => j.date === dayIso);
-    const list = applyCatFilter(listAll, jobsCatFilter).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-    results.innerHTML = list.length ? list.map(cardJob).join("") : `<p class="muted">No entries for this day + filter.</p>`;
-    bindJobActions();
+  if (tab) {
+    state.tab = tab;
+    render();
+    return;
   }
 
-  function showForMonth(ym) {
-    const listAll = jobs.filter(j => (j.date || "").startsWith(ym + "-"));
-    const list = applyCatFilter(listAll, jobsCatFilter).sort((a, b) =>
-      (b.date || "").localeCompare(a.date || "") || ((b.createdAt || 0) - (a.createdAt || 0))
-    );
+  if (!action) return;
 
-    results.innerHTML = list.length
-      ? `
-        <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <strong style="color:var(--text-strong)">Month: ${fmtMonth(ym)}</strong>
-            <span class="muted">${list.length} job${list.length === 1 ? "" : "s"}</span>
-          </div>
-          <hr>
-          ${list.map(j => cardJob(j, true)).join("")}
-        </div>
-      `
-      : `<p class="muted">No entries for this month + filter.</p>`;
-    bindJobActions();
+  if (action === "new-job") {
+    jobForm();
+    return;
   }
 
-  $("#modeDayBtn").onclick = () => { dateMode = "day"; renderByDate(); };
-  $("#modeMonthBtn").onclick = () => { dateMode = "month"; renderByDate(); };
-
-  const dayInput = $("#pickDay");
-  const monthInput = $("#pickMonth");
-
-  if (dayInput) dayInput.addEventListener("change", () => showForDay(dayInput.value));
-  if (monthInput) monthInput.addEventListener("change", () => showForMonth(monthInput.value));
-
-  if (dateMode === "day") showForDay(defaultDay);
-  else showForMonth(defaultMonth);
-}
-
-// SEARCH
-async function renderSearch() {
-  const jobs = (await getAllJobs()).map(ensureCategory);
-
-  view.innerHTML = `
-    <h2>Search</h2>
-    ${renderCatToggle(jobsCatFilter, "jobfilter_search")}
-    <input id="q" placeholder="Search W/O, T/C, P/N, Trainer, Notes, or Date …" />
-    <div id="results" style="margin-top:10px;"></div>
-  `;
-
-  bindCatToggle("jobfilter_search", (f) => { jobsCatFilter = f; renderSearch(); });
-
-  const input = $("#q");
-  const results = $("#results");
-
-  function doSearch() {
-    const q = normalize(input.value);
-    if (!q) {
-      results.innerHTML = `<p class="muted">Type to search.</p>`;
-      return;
-    }
-    const hitsAll = jobs.filter(j => (j.search || "").includes(q));
-    const hits = applyCatFilter(hitsAll, jobsCatFilter).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-    results.innerHTML = hits.length ? hits.map(j => cardJob(j, true)).join("") : `<p class="muted">No results for this filter.</p>`;
-    bindJobActions();
+  if (action === "new-todo") {
+    todoForm();
+    return;
   }
 
-  input.addEventListener("input", doSearch);
-  doSearch();
-}
+  if (action === "cancel") {
+    render();
+    return;
+  }
 
-// TODO TAB
-async function renderTodo() {
-  const todos = (await getAllTodos()).map(ensureCategory);
-
-  const openAll = todos.filter(t => !t.done);
-  const doneAll = todos.filter(t => t.done);
-
-  const open = applyCatFilter(openAll, todoCatFilter).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  const done = applyCatFilter(doneAll, todoCatFilter).sort((a, b) => ((b.doneAt || 0) - (a.doneAt || 0)));
-
-  // completion banners per category
-  const openCLS = openAll.filter(t => t.category === "CLS").length;
-  const openINT = openAll.filter(t => t.category === "INT").length;
-  const clsBanner = openCLS === 0 ? `<div class="card match"><strong>All CLS OJT done</strong></div>` : "";
-  const intBanner = openINT === 0 ? `<div class="card match"><strong>All INT OJT done</strong></div>` : "";
-
-  view.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-      <h2 style="margin:0;">ToDo / OJT List</h2>
-      <button class="btn" id="recheckBtn">Recheck All</button>
-    </div>
-
-    ${clsBanner}
-    ${intBanner}
-
-    ${renderCatToggle(todoCatFilter, "todofilter")}
-
-    <div class="card">
-      <strong style="color:var(--text-strong)">Add ToDo</strong>
-
-      <label>Category (required)</label>
-      ${categorySelect("t_cat", (todoCatFilter === "CLS" || todoCatFilter === "INT") ? todoCatFilter : "CLS")}
-
-      <div class="row" style="margin-top:10px;">
-        <div>
-          <label>W/O (optional)</label>
-          <input id="t_wo" placeholder="e.g. 123456" />
-        </div>
-        <div>
-          <label>T/C (optional)</label>
-          <input id="t_tc" placeholder="e.g. ABC-01" />
-        </div>
-      </div>
-
-      <label>P/N (optional)</label>
-      <input id="t_pn" placeholder="e.g. 98-7654-321" />
-
-      <label>Notes / Keywords (optional)</label>
-      <input id="t_text" placeholder="free text" />
-
-      <div class="row" style="margin-top:12px;">
-        <button class="btn primary" id="addTodoBtn">Add ToDo</button>
-        <button class="btn" id="importTodoBtn">Import ToDo…</button>
-        <input type="file" id="importTodoInput" style="display:none" accept=".json,.csv,application/json,text/csv" />
-      </div>
-
-      <p class="smallnote" style="margin-top:10px;">
-        Matching rule:
-        <br>• If Job has P/N → P/N must match 100% AND Notes ≥ 96%.
-        <br>• If Job has no P/N → Notes ≥ 96% only.
-      </p>
-    </div>
-
-    <h2>Open</h2>
-    ${open.length ? open.map(todoCard).join("") : `<p class="muted">No open ToDos for this filter.</p>`}
-
-    <h2>Done</h2>
-    ${done.length ? done.map(todoCard).join("") : `<p class="muted">No done ToDos for this filter.</p>`}
-  `;
-
-  bindCatToggle("todofilter", (f) => { todoCatFilter = f; renderTodo(); });
-
-  $("#recheckBtn").onclick = async () => {
-    if (!confirm("Recheck all OPEN ToDos against existing Jobs?")) return;
+  if (action === "save-job") {
+    const job = {
+      id: uid(),
+      category: safeStr($("#jcat")?.value) || "CLS",
+      pn: safeStr($("#jpn")?.value),
+      notes: safeStr($("#jnotes")?.value),
+      date: todayISO(),
+      done: false,
+    };
+    await put(JOBS, job);
     await recheckAll();
-  };
-
-  $("#addTodoBtn").onclick = async () => {
-    const todo = ensureCategory({
-      id: uuid(),
-      category: ($("#t_cat").value || "CLS").trim().toUpperCase(),
-      wo: ($("#t_wo").value || "").trim(),
-      tc: ($("#t_tc").value || "").trim(),
-      pn: ($("#t_pn").value || "").trim(),
-      text: ($("#t_text").value || "").trim(),
-      done: false,
-      createdAt: Date.now(),
-      doneAt: null,
-      matchedJobId: null
-    });
-
-    if (!CATEGORIES.includes(todo.category)) {
-      setStatus("Please select a category.");
-      return;
-    }
-
-    if (!todo.wo && !todo.tc && !todo.pn && !todo.text) {
-      setStatus("Please fill at least one field.");
-      return;
-    }
-
-    todo.search = makeTodoSearch(todo);
-    await putTodo(todo);
-    await applyJobMatchingForTodo(todo);
-
-    setStatus("ToDo added.");
-    renderTodo();
-  };
-
-  // import
-  $("#importTodoBtn").onclick = () => {
-    $("#importTodoInput").value = "";
-    $("#importTodoInput").click();
-  };
-
-  $("#importTodoInput").addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const text = await file.text();
-    let items = [];
-
-    if (file.type === "text/csv" || file.name.toLowerCase().endsWith(".csv")) {
-      items = parseCsvTodos(text);
-    } else {
-      try {
-        const parsed = JSON.parse(text);
-        if (Array.isArray(parsed)) items = parsed;
-        else if (parsed && Array.isArray(parsed.todos)) items = parsed.todos;
-        else throw new Error("bad");
-      } catch {
-        alert("Invalid ToDo file. Use JSON array or CSV.");
-        return;
-      }
-    }
-
-    const added = await importTodos(items);
-    setStatus(`Imported ToDos: ${added}`);
-    currentTab = "todo";
+    state.tab = "today";
     render();
-  });
-
-  bindTodoActions();
-}
-
-// SETTINGS (Backup/Restore)
-async function renderSettings() {
-  view.innerHTML = `
-    <h2>Settings</h2>
-
-    <div class="card">
-      <strong style="color:var(--text-strong)">Backup & Restore</strong>
-      <div class="row" style="margin-top:12px;">
-        <button class="btn primary" id="backupBtn">Backup (Download)</button>
-        <button class="btn" id="restoreBtn">Restore…</button>
-        <input type="file" id="restoreInput" style="display:none" accept=".json,application/json" />
-      </div>
-      <p class="smallnote" style="margin-top:10px;">
-        Backup creates a .json file with all Jobs + ToDos (offline).
-      </p>
-    </div>
-  `;
-
-  $("#backupBtn").onclick = async () => {
-    const jobs = await getAllJobs();
-    const todos = await getAllTodos();
-    const payload = { version: 1, exportedAt: new Date().toISOString(), jobs, todos };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    a.href = url;
-    a.download = `worklog-backup-${stamp}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    setStatus("Backup file created.");
-  };
-
-  $("#restoreBtn").onclick = () => {
-    $("#restoreInput").value = "";
-    $("#restoreInput").click();
-  };
-
-  $("#restoreInput").addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const text = await file.text();
-
-    let data;
-    try { data = JSON.parse(text); } catch { alert("Invalid backup file."); return; }
-    if (!data || !Array.isArray(data.jobs) || !Array.isArray(data.todos)) {
-      alert("Backup format not recognized.");
-      return;
-    }
-    if (!confirm("Restore will REPLACE current data. Continue?")) return;
-
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction([JOBS, TODOS], "readwrite");
-      tx.objectStore(JOBS).clear();
-      tx.objectStore(TODOS).clear();
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-
-    for (const j of data.jobs) {
-      ensureCategory(j);
-      j.search = makeJobSearch(j);
-      await putJob(j);
-    }
-    for (const t of data.todos) {
-      ensureCategory(t);
-      t.search = makeTodoSearch(t);
-      await putTodo(t);
-    }
-
-    setStatus("Restore complete.");
-    currentTab = "today";
-    render();
-  });
-}
-
-// ---------- Job Form ----------
-function renderJobForm(existing = null) {
-  const isEdit = !!existing;
-  const d = existing?.date || todayISO();
-  const cat = existing?.category && CATEGORIES.includes(existing.category) ? existing.category : "CLS";
-
-  view.innerHTML = `
-    <h2>${isEdit ? "Edit Job" : "New Job"}</h2>
-
-    <label>Category (required)</label>
-    ${categorySelect("category", cat)}
-
-    <label>Date</label>
-    <input id="date" type="date" value="${escapeHtml(d)}" />
-
-    <div class="row">
-      <div>
-        <label>W/O</label>
-        <input id="wo" placeholder="e.g. 123456" value="${escapeHtml(existing?.wo || "")}" />
-      </div>
-      <div>
-        <label>T/C</label>
-        <input id="tc" placeholder="e.g. ABC-01" value="${escapeHtml(existing?.tc || "")}" />
-      </div>
-    </div>
-
-    <label>P/N</label>
-    <input id="pn" placeholder="e.g. 98-7654-321" value="${escapeHtml(existing?.pn || "")}" />
-
-    <label>Trainer</label>
-    <input id="trainer" placeholder="e.g. John Smith" value="${escapeHtml(existing?.trainer || "")}" />
-
-    <label>Notes</label>
-    <textarea id="text" placeholder="What did you do?">${escapeHtml(existing?.text || "")}</textarea>
-
-    <div class="row" style="margin-top:12px;">
-      <button id="saveBtn" class="btn primary">${isEdit ? "Save" : "Create"}</button>
-      <button id="cancelBtn" class="btn">Cancel</button>
-    </div>
-  `;
-
-  $("#cancelBtn").onclick = () => render();
-
-  $("#saveBtn").onclick = async () => {
-    const category = ($("#category").value || "").trim().toUpperCase();
-    if (!CATEGORIES.includes(category)) {
-      setStatus("Please select a category.");
-      return;
-    }
-
-    const job = ensureCategory({
-      id: existing?.id || uuid(),
-      category,
-      date: $("#date").value || todayISO(),
-      wo: ($("#wo").value || "").trim(),
-      tc: ($("#tc").value || "").trim(),
-      pn: ($("#pn").value || "").trim(),
-      trainer: ($("#trainer").value || "").trim(),
-      text: ($("#text").value || "").trim(),
-      createdAt: existing?.createdAt || Date.now(),
-      updatedAt: Date.now(),
-      todoMatched: existing?.todoMatched || false,
-      matchedTodoIds: existing?.matchedTodoIds || []
-    });
-
-    if (!job.wo && !job.tc && !job.pn && !job.trainer && !job.text) {
-      setStatus("Please fill at least one field.");
-      return;
-    }
-
-    job.search = makeJobSearch(job);
-    await putJob(job);
-
-    // IMPORTANT: match open todos now
-    await applyTodoMatchingForJob(job);
-
-    setStatus(isEdit ? "Saved." : "Created.");
-    currentTab = "today";
-    render();
-  };
-}
-
-// ---------- CSV / Import ----------
-function parseCsvTodos(csvText) {
-  const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  if (!lines.length) return [];
-  const first = normalize(lines[0]);
-  const hasHeader = first.includes("wo") && first.includes("tc");
-  const start = hasHeader ? 1 : 0;
-
-  const out = [];
-  for (let i = start; i < lines.length; i++) {
-    const cols = lines[i].split(",").map(c => c.trim());
-    const maybeCat = (cols[0] || "").toUpperCase();
-
-    if (maybeCat === "CLS" || maybeCat === "INT") {
-      out.push({
-        category: maybeCat,
-        wo: cols[1] || "",
-        tc: cols[2] || "",
-        pn: cols[3] || "",
-        text: cols.slice(4).join(",") || ""
-      });
-    } else {
-      out.push({
-        category: "CLS",
-        wo: cols[0] || "",
-        tc: cols[1] || "",
-        pn: cols[2] || "",
-        text: cols.slice(3).join(",") || ""
-      });
-    }
+    return;
   }
-  return out;
-}
 
-async function importTodos(items) {
-  const existing = (await getAllTodos()).map(ensureCategory);
-  const existingKeys = new Set(existing.map(t => normalize(t.search || "")));
-  const now = Date.now();
-  let added = 0;
-
-  for (const x of items) {
-    const todo = ensureCategory({
-      id: uuid(),
-      category: (x.category || x.cat || "CLS").trim().toUpperCase(),
-      wo: (x.wo || "").trim(),
-      tc: (x.tc || "").trim(),
-      pn: (x.pn || "").trim(),
-      text: (x.text || "").trim(),
+  if (action === "save-todo") {
+    const todo = {
+      id: uid(),
+      category: safeStr($("#tcat")?.value) || "CLS",
+      pn: safeStr($("#tpn")?.value),
+      notes: safeStr($("#tnotes")?.value),
       done: false,
-      createdAt: now,
-      doneAt: null,
-      matchedJobId: null
-    });
-
-    if (!CATEGORIES.includes(todo.category)) todo.category = "CLS";
-    if (!todo.wo && !todo.tc && !todo.pn && !todo.text) continue;
-
-    todo.search = makeTodoSearch(todo);
-    const key = normalize(todo.search);
-    if (key && existingKeys.has(key)) continue;
-    existingKeys.add(key);
-
-    await putTodo(todo);
-    await applyJobMatchingForTodo(todo);
-    added++;
-  }
-  return added;
-}
-
-// ---------- Navigation ----------
-document.querySelectorAll("nav button").forEach(btn => {
-  btn.onclick = () => {
-    currentTab = btn.getAttribute("data-tab");
+    };
+    await put(TODOS, todo);
+    await recheckAll();
+    state.tab = "todo";
     render();
-  };
+    return;
+  }
+
+  if (action === "delete-job") {
+    const id = e.target.dataset.id;
+    if (id && confirm("Delete this job?")) {
+      await del(JOBS, id);
+      await recheckAll();
+      render();
+    }
+    return;
+  }
+
+  if (action === "delete-todo") {
+    const id = e.target.dataset.id;
+    if (id && confirm("Delete this ToDo?")) {
+      await del(TODOS, id);
+      await recheckAll();
+      render();
+    }
+    return;
+  }
+
+  if (action === "backup") {
+    backup();
+    return;
+  }
+
+  if (action === "restore") {
+    $("#restoreFile")?.click();
+    return;
+  }
+
+  if (action === "recheck") {
+    await recheckAll();
+    render();
+    return;
+  }
 });
 
-// optional plus button
-if ($("#addBtn")) $("#addBtn").onclick = () => renderJobForm(null);
+/* -------------------- Change Handler -------------------- */
+document.addEventListener("change", (e) => {
+  if (e.target.id === "restoreFile") {
+    restore(e.target.files?.[0]);
+    return;
+  }
+  if (e.target.dataset.action === "pick-month") {
+    state.month = e.target.value;
+    render();
+    return;
+  }
+});
 
-// ---------- Init ----------
-(async function init() {
+/* -------------------- Init -------------------- */
+(async () => {
   db = await openDB();
-
-  // normalize existing data (category + search)
-  const jobs = await getAllJobs();
-  for (const j of jobs) {
-    const jj = ensureCategory(j);
-    jj.search = makeJobSearch(jj);
-    await putJob(jj);
-  }
-  const todos = await getAllTodos();
-  for (const t of todos) {
-    const tt = ensureCategory(t);
-    tt.search = makeTodoSearch(tt);
-    await putTodo(tt);
-  }
-
-  // default view
+  await recheckAll();
   render();
 })();
