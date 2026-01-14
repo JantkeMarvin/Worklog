@@ -1,444 +1,299 @@
-/* =========================================================
-   WORKLOG / OJT TRACKER (Stable)
-   - Offline (IndexedDB)
-   - Simple Views: Today / Month / ToDo / Settings
-   - Header Buttons always work: + New Job / + New ToDo
-   ========================================================= */
-
-/* -------------------- Service Worker -------------------- */
+// ---------- PWA / Service Worker ----------
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  window.addEventListener("load", async () => {
+    try { await navigator.serviceWorker.register("./sw.js"); } catch (_) {}
   });
 }
 
-/* -------------------- IndexedDB -------------------- */
+// ---------- IndexedDB ----------
 const DB_NAME = "worklog_db";
-const DB_VERSION = 1;
-const JOBS = "jobs";
-const TODOS = "todos";
-
+const STORE = "jobs";
 let db;
 
 function openDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-
+    const req = indexedDB.open(DB_NAME, 1);
     req.onupgradeneeded = () => {
       const d = req.result;
-      if (!d.objectStoreNames.contains(JOBS)) {
-        d.createObjectStore(JOBS, { keyPath: "id" });
-      }
-      if (!d.objectStoreNames.contains(TODOS)) {
-        d.createObjectStore(TODOS, { keyPath: "id" });
-      }
+      const s = d.createObjectStore(STORE, { keyPath: "id" });
+      s.createIndex("date", "date");
+      s.createIndex("createdAt", "createdAt");
+      s.createIndex("search", "search");
     };
-
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
-
-function store(name, mode = "readonly") {
-  return db.transaction(name, mode).objectStore(name);
+function store(mode="readonly") {
+  return db.transaction(STORE, mode).objectStore(STORE);
 }
-
-function getAll(name) {
-  return new Promise((res, rej) => {
-    try {
-      const r = store(name).getAll();
-      r.onsuccess = () => res(r.result || []);
-      r.onerror = () => rej(r.error);
-    } catch (e) {
-      rej(e);
-    }
+function getAllJobs() {
+  return new Promise((resolve, reject) => {
+    const req = store().getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+function putJob(job) {
+  return new Promise((resolve, reject) => {
+    const req = store("readwrite").put(job);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+function deleteJob(id) {
+  return new Promise((resolve, reject) => {
+    const req = store("readwrite").delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
   });
 }
 
-function put(name, obj) {
-  return new Promise((res, rej) => {
-    try {
-      const r = store(name, "readwrite").put(obj);
-      r.onsuccess = () => res();
-      r.onerror = () => rej(r.error);
-    } catch (e) {
-      rej(e);
-    }
-  });
-}
-
-function del(name, id) {
-  return new Promise((res, rej) => {
-    try {
-      const r = store(name, "readwrite").delete(id);
-      r.onsuccess = () => res();
-      r.onerror = () => rej(r.error);
-    } catch (e) {
-      rej(e);
-    }
-  });
-}
-
-/* -------------------- Helpers -------------------- */
-const $ = (q) => document.querySelector(q);
+// ---------- Helpers ----------
+const $ = (sel) => document.querySelector(sel);
 const view = $("#view");
+const statusEl = $("#status");
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
-
-function uid() {
-  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
-  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+function setStatus(msg) {
+  statusEl.textContent = msg || "";
+  if (msg) setTimeout(() => { if (statusEl.textContent === msg) statusEl.textContent = ""; }, 1800);
 }
 
-function safeStr(v) {
-  return (v ?? "").toString().trim();
+function todayISO() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth()+1).padStart(2,"0");
+  const dd = String(d.getDate()).padStart(2,"0");
+  return `${yyyy}-${mm}-${dd}`;
 }
-
-/* -------------------- Similarity (Notes) -------------------- */
-function similarity(a, b) {
-  a = safeStr(a);
-  b = safeStr(b);
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-
-  const m = a.length, n = b.length;
-  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
-
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,
-        dp[i][j - 1] + 1,
-        dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
-      );
-    }
+function fmtDate(iso) {
+  const [y,m,d] = iso.split("-");
+  return `${d}.${m}.${y}`;
+}
+function escapeHtml(s="") {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+}
+function makeSearchString(job) {
+  return [job.date, job.wo, job.tc, job.pn, job.text]
+    .filter(Boolean).join(" ").toLowerCase();
+}
+function uuid() {
+  return (crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+}
+function groupByDate(jobs) {
+  const map = new Map();
+  for (const j of jobs) {
+    if (!map.has(j.date)) map.set(j.date, []);
+    map.get(j.date).push(j);
   }
-  return 1 - dp[m][n] / Math.max(m, n);
+  const dates = [...map.keys()].sort((a,b)=> b.localeCompare(a));
+  return dates.map(date => ({
+    date,
+    items: map.get(date).sort((a,b)=> b.createdAt - a.createdAt)
+  }));
 }
 
-/* -------------------- Matching Rule -------------------- */
-/*
-RULE:
-- Categories must match
-- If Job has P/N:
-    → P/N must match 100%
-    → AND Notes similarity >= 0.96 (both notes must exist)
-- If Job has NO P/N:
-    → Notes similarity >= 0.96
-*/
-function isMatch(todo, job) {
-  if (safeStr(todo.category) !== safeStr(job.category)) return false;
+// ---------- Rendering ----------
+let currentTab = "today";
 
-  const jobPN = safeStr(job.pn);
-  const todoPN = safeStr(todo.pn);
-  const jobNotes = safeStr(job.notes);
-  const todoNotes = safeStr(todo.notes);
-
-  if (jobPN) {
-    if (jobPN !== todoPN) return false;
-    if (!jobNotes || !todoNotes) return false;
-    return similarity(jobNotes, todoNotes) >= 0.96;
-  }
-
-  if (!jobNotes || !todoNotes) return false;
-  return similarity(jobNotes, todoNotes) >= 0.96;
-}
-
-async function recheckAll() {
-  const jobs = await getAll(JOBS);
-  const todos = await getAll(TODOS);
-
-  jobs.forEach((j) => (j.done = false));
-  todos.forEach((t) => (t.done = false));
-
-  for (const t of todos) {
-    const hit = jobs.find((j) => isMatch(t, j));
-    if (hit) {
-      t.done = true;
-      hit.done = true;
-    }
-  }
-
-  for (const j of jobs) await put(JOBS, j);
-  for (const t of todos) await put(TODOS, t);
-}
-
-/* -------------------- State -------------------- */
-let state = {
-  tab: "today",  // today | month | todo | settings
-  month: new Date().toISOString().slice(0, 7),
-};
-
-/* -------------------- Rendering -------------------- */
 async function render() {
-  if (state.tab === "today") return renderToday();
-  if (state.tab === "month") return renderMonth();
-  if (state.tab === "todo") return renderTodo();
-  if (state.tab === "settings") return renderSettings();
+  if (currentTab === "today") return renderToday();
+  if (currentTab === "days") return renderDays();
+  if (currentTab === "search") return renderSearch();
 }
 
-function renderJobCard(j) {
+function cardJobInner(job, showDate=false) {
   return `
-    <div class="card ${j.done ? "done" : ""}">
-      <div><b>${safeStr(j.category)}</b> ${safeStr(j.pn)}</div>
-      <div style="color:#888;margin-top:6px;white-space:pre-wrap;">${safeStr(j.notes)}</div>
-      <div style="margin-top:8px;">
-        <button data-action="delete-job" data-id="${j.id}">Delete</button>
+    <div style="display:flex;justify-content:space-between;gap:10px;">
+      <div>
+        ${showDate ? `<div class="muted">${fmtDate(job.date)}</div>` : ``}
+        <div>
+          ${job.wo ? `<span class="pill">W/O: ${escapeHtml(job.wo)}</span>` : ``}
+          ${job.tc ? `<span class="pill">T/C: ${escapeHtml(job.tc)}</span>` : ``}
+          ${job.pn ? `<span class="pill">P/N: ${escapeHtml(job.pn)}</span>` : ``}
+        </div>
+        ${job.text
+          ? `<div style="margin-top:8px;">${escapeHtml(job.text).replace(/\n/g,"<br>")}</div>`
+          : `<div class="muted" style="margin-top:8px;">(kein Freitext)</div>`}
+      </div>
+      <div class="actions">
+        <button data-edit="${job.id}">Bearbeiten</button>
+        <button data-del="${job.id}" class="danger">Löschen</button>
       </div>
     </div>
   `;
 }
+function cardJob(job, showDate=false) {
+  return `<div class="card">${cardJobInner(job, showDate)}</div>`;
+}
 
-function renderTodoCard(t) {
-  return `
-    <div class="card ${t.done ? "done" : ""}">
-      <div><b>${safeStr(t.category)}</b> ${safeStr(t.pn)}</div>
-      <div style="color:#888;margin-top:6px;white-space:pre-wrap;">${safeStr(t.notes)}</div>
-      <div style="margin-top:8px;">
-        <button data-action="delete-todo" data-id="${t.id}">Delete</button>
-      </div>
-    </div>
-  `;
+function bindCardActions() {
+  document.querySelectorAll("[data-del]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.getAttribute("data-del");
+      if (confirm("Eintrag wirklich löschen?")) {
+        await deleteJob(id);
+        setStatus("Gelöscht.");
+        render();
+      }
+    };
+  });
+  document.querySelectorAll("[data-edit]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.getAttribute("data-edit");
+      const jobs = await getAllJobs();
+      const job = jobs.find(j => j.id === id);
+      if (job) renderForm(job);
+    };
+  });
 }
 
 async function renderToday() {
-  const jobs = await getAll(JOBS);
-  const today = todayISO();
-  const list = jobs.filter((j) => j.date === today);
+  const jobs = await getAllJobs();
+  const t = todayISO();
+  const todays = jobs.filter(j => j.date === t).sort((a,b)=> b.createdAt - a.createdAt);
 
   view.innerHTML = `
-    <h2>Today (${today.split("-").reverse().join(".")})</h2>
-    ${list.length ? list.map(renderJobCard).join("") : `<p style="color:#999;">No entries for today.</p>`}
+    <h2>Heute (${fmtDate(t)})</h2>
+    ${todays.length ? todays.map(j => cardJob(j)).join("") : `<p class="muted">Noch keine Einträge für heute.</p>`}
   `;
+  bindCardActions();
 }
 
-async function renderMonth() {
-  const jobs = await getAll(JOBS);
-  const list = jobs.filter((j) => safeStr(j.date).startsWith(state.month));
+async function renderDays() {
+  const jobs = await getAllJobs();
+  const grouped = groupByDate(jobs);
 
   view.innerHTML = `
-    <h2>Month</h2>
-    <input type="month" value="${state.month}" data-action="pick-month">
-    <div style="margin-top:12px;">
-      ${list.length ? list.map(renderJobCard).join("") : `<p style="color:#999;">No entries in this month.</p>`}
+    <h2>Alle Tage</h2>
+    ${grouped.length ? grouped.map(g => `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <strong>${fmtDate(g.date)}</strong>
+          <span class="muted">${g.items.length} Auftrag${g.items.length===1?"":"e"}</span>
+        </div>
+        <hr>
+        ${g.items.map(j => cardJob(j)).join("")}
+      </div>
+    `).join("") : `<p class="muted">Noch keine Einträge vorhanden.</p>`}
+  `;
+  bindCardActions();
+}
+
+async function renderSearch() {
+  view.innerHTML = `
+    <h2>Suche</h2>
+    <input id="q" placeholder="Suche nach W/O, T/C, P/N oder Text…" />
+    <div id="results" style="margin-top:10px;"></div>
+  `;
+
+  const input = $("#q");
+  const results = $("#results");
+
+  let jobs = await getAllJobs();
+
+  function doSearch() {
+    const q = (input.value || "").trim().toLowerCase();
+    if (!q) {
+      results.innerHTML = `<p class="muted">Tippe etwas ein, um zu suchen.</p>`;
+      return;
+    }
+    const hits = jobs
+      .filter(j => (j.search || "").includes(q))
+      .sort((a,b)=> b.createdAt - a.createdAt);
+
+    results.innerHTML = hits.length
+      ? hits.map(j => cardJob(j, true)).join("")
+      : `<p class="muted">Keine Treffer.</p>`;
+
+    bindCardActions();
+  }
+
+  input.addEventListener("input", doSearch);
+  doSearch();
+}
+
+// ---------- Form (Neu/Bearbeiten) ----------
+function renderForm(existing=null) {
+  const isEdit = !!existing;
+  const d = existing?.date || todayISO();
+
+  view.innerHTML = `
+    <h2>${isEdit ? "Auftrag bearbeiten" : "Neuer Auftrag"}</h2>
+
+    <label>Datum</label>
+    <input id="date" type="date" value="${escapeHtml(d)}" />
+
+    <div class="row">
+      <div>
+        <label>W/O</label>
+        <input id="wo" placeholder="z.B. 123456" value="${escapeHtml(existing?.wo || "")}" />
+      </div>
+      <div>
+        <label>T/C</label>
+        <input id="tc" placeholder="z.B. ABC-01" value="${escapeHtml(existing?.tc || "")}" />
+      </div>
     </div>
-  `;
-}
 
-async function renderTodo() {
-  const todos = await getAll(TODOS);
-  const open = todos.filter((t) => !t.done);
-  const done = todos.filter((t) => t.done);
+    <label>P/N</label>
+    <input id="pn" placeholder="z.B. 98-7654-321" value="${escapeHtml(existing?.pn || "")}" />
 
-  view.innerHTML = `
-    <h2>ToDo / OJT</h2>
+    <label>Durchgeführte Arbeiten (Freitext)</label>
+    <textarea id="text" placeholder="Kurz und klar: was hast du gemacht?">${escapeHtml(existing?.text || "")}</textarea>
 
-    <h3>Open</h3>
-    ${open.length ? open.map(renderTodoCard).join("") : `<p style="color:#999;">None</p>`}
-
-    <h3>Done</h3>
-    ${done.length ? done.map(renderTodoCard).join("") : `<p style="color:#999;">None</p>`}
-  `;
-}
-
-function renderSettings() {
-  view.innerHTML = `
-    <h2>Settings</h2>
-    <button data-action="backup">Backup</button>
-    <button data-action="restore">Restore</button>
-    <button data-action="recheck">Recheck All</button>
-    <input type="file" id="restoreFile" accept="application/json" hidden>
-  `;
-}
-
-/* -------------------- Forms -------------------- */
-function jobForm() {
-  view.innerHTML = `
-    <h2>New Job</h2>
-    <label>Category</label>
-    <select id="jcat">
-      <option value="CLS">CLS</option>
-      <option value="INT">INT</option>
-    </select>
-
-    <label style="display:block;margin-top:10px;">P/N</label>
-    <input id="jpn" placeholder="P/N">
-
-    <label style="display:block;margin-top:10px;">Notes</label>
-    <textarea id="jnotes" placeholder="Notes"></textarea>
-
-    <div style="margin-top:12px;display:flex;gap:10px;">
-      <button data-action="save-job">Create</button>
-      <button data-action="cancel">Cancel</button>
+    <div class="row" style="margin-top:12px;">
+      <button id="saveBtn" class="primary">${isEdit ? "Speichern" : "Anlegen"}</button>
+      <button id="cancelBtn">Abbrechen</button>
     </div>
+
+    <p class="muted" style="margin-top:10px;">
+      Tipp: Die Suche findet W/O, T/C, P/N und Stichwörter aus dem Text.
+    </p>
   `;
-}
 
-function todoForm() {
-  view.innerHTML = `
-    <h2>New ToDo</h2>
-    <label>Category</label>
-    <select id="tcat">
-      <option value="CLS">CLS</option>
-      <option value="INT">INT</option>
-    </select>
+  $("#cancelBtn").onclick = () => render();
 
-    <label style="display:block;margin-top:10px;">P/N</label>
-    <input id="tpn" placeholder="P/N">
-
-    <label style="display:block;margin-top:10px;">Notes</label>
-    <textarea id="tnotes" placeholder="Notes"></textarea>
-
-    <div style="margin-top:12px;display:flex;gap:10px;">
-      <button data-action="save-todo">Create</button>
-      <button data-action="cancel">Cancel</button>
-    </div>
-  `;
-}
-
-/* -------------------- Backup / Restore -------------------- */
-async function backup() {
-  const data = {
-    jobs: await getAll(JOBS),
-    todos: await getAll(TODOS),
-  };
-  const blob = new Blob([JSON.stringify(data, null, 2)], {
-    type: "application/json",
-  });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "worklog-backup.json";
-  a.click();
-}
-
-async function restore(file) {
-  if (!file) return;
-  const text = await file.text();
-  const data = JSON.parse(text);
-
-  // overwrite existing by putting same IDs; user can clear manually if needed
-  for (const j of data.jobs || []) await put(JOBS, j);
-  for (const t of data.todos || []) await put(TODOS, t);
-
-  await recheckAll();
-  render();
-}
-
-/* -------------------- Global Click Handler -------------------- */
-document.addEventListener("click", async (e) => {
-  const action = e.target?.dataset?.action;
-  const tab = e.target?.dataset?.tab;
-
-  if (tab) {
-    state.tab = tab;
-    render();
-    return;
-  }
-
-  if (!action) return;
-
-  if (action === "new-job") {
-    jobForm();
-    return;
-  }
-
-  if (action === "new-todo") {
-    todoForm();
-    return;
-  }
-
-  if (action === "cancel") {
-    render();
-    return;
-  }
-
-  if (action === "save-job") {
+  $("#saveBtn").onclick = async () => {
     const job = {
-      id: uid(),
-      category: safeStr($("#jcat")?.value) || "CLS",
-      pn: safeStr($("#jpn")?.value),
-      notes: safeStr($("#jnotes")?.value),
-      date: todayISO(),
-      done: false,
+      id: existing?.id || uuid(),
+      date: $("#date").value || todayISO(),
+      wo: ($("#wo").value || "").trim(),
+      tc: ($("#tc").value || "").trim(),
+      pn: ($("#pn").value || "").trim(),
+      text: ($("#text").value || "").trim(),
+      createdAt: existing?.createdAt || Date.now(),
+      updatedAt: Date.now()
     };
-    await put(JOBS, job);
-    await recheckAll();
-    state.tab = "today";
-    render();
-    return;
-  }
 
-  if (action === "save-todo") {
-    const todo = {
-      id: uid(),
-      category: safeStr($("#tcat")?.value) || "CLS",
-      pn: safeStr($("#tpn")?.value),
-      notes: safeStr($("#tnotes")?.value),
-      done: false,
-    };
-    await put(TODOS, todo);
-    await recheckAll();
-    state.tab = "todo";
-    render();
-    return;
-  }
-
-  if (action === "delete-job") {
-    const id = e.target.dataset.id;
-    if (id && confirm("Delete this job?")) {
-      await del(JOBS, id);
-      await recheckAll();
-      render();
+    // Minimal-Validierung: mind. ein Feld außer Datum
+    if (!job.wo && !job.tc && !job.pn && !job.text) {
+      setStatus("Bitte mindestens ein Feld ausfüllen.");
+      return;
     }
-    return;
-  }
 
-  if (action === "delete-todo") {
-    const id = e.target.dataset.id;
-    if (id && confirm("Delete this ToDo?")) {
-      await del(TODOS, id);
-      await recheckAll();
-      render();
-    }
-    return;
-  }
+    job.search = makeSearchString(job);
+    await putJob(job);
 
-  if (action === "backup") {
-    backup();
-    return;
-  }
-
-  if (action === "restore") {
-    $("#restoreFile")?.click();
-    return;
-  }
-
-  if (action === "recheck") {
-    await recheckAll();
+    setStatus(isEdit ? "Gespeichert." : "Angelegt.");
+    currentTab = "today";
     render();
-    return;
-  }
+  };
+}
+
+// ---------- Navigation ----------
+document.querySelectorAll("nav button").forEach(btn => {
+  btn.onclick = () => {
+    currentTab = btn.getAttribute("data-tab");
+    render();
+  };
 });
 
-/* -------------------- Change Handler -------------------- */
-document.addEventListener("change", (e) => {
-  if (e.target.id === "restoreFile") {
-    restore(e.target.files?.[0]);
-    return;
-  }
-  if (e.target.dataset.action === "pick-month") {
-    state.month = e.target.value;
-    render();
-    return;
-  }
-});
+$("#addBtn").onclick = () => renderForm(null);
 
-/* -------------------- Init -------------------- */
-(async () => {
+// ---------- Init ----------
+(async function init() {
   db = await openDB();
-  await recheckAll();
   render();
 })();
