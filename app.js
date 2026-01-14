@@ -437,7 +437,6 @@ async function renderTodo() {
 
       <div class="row" style="margin-top:12px;">
         <button class="btn primary" id="addTodoBtn">Add ToDo</button>
-        <button class="btn" id="loadSampleBtn">Load sample list</button>
       </div>
 
       <p class="smallnote" style="margin-top:10px;">
@@ -471,20 +470,6 @@ async function renderTodo() {
     todo.search = makeTodoSearch(todo);
     await putTodo(todo);
     setStatus("ToDo added.");
-    render();
-  };
-
-  $("#loadSampleBtn").onclick = async () => {
-    const sample = [
-      { wo: "OJT", tc: "INSPECTION", pn: "", text: "perform inspection and document findings" },
-      { wo: "", tc: "TROUBLESHOOT", pn: "", text: "troubleshooting procedure" },
-      { wo: "", tc: "", pn: "P/N", text: "replace part and log serial/batch" }
-    ];
-
-    if (!confirm("Load sample ToDo list?")) return;
-
-    await importTodos(sample);
-    setStatus("Sample list loaded.");
     render();
   };
 
@@ -645,7 +630,7 @@ async function importTodos(items) {
     todo.search = makeTodoSearch(todo);
     const key = normalize(todo.search);
 
-    if (key && existingKeys.has(key)) continue; // simple dedupe
+    if (key && existingKeys.has(key)) continue; // dedupe
     existingKeys.add(key);
 
     await putTodo(todo);
@@ -660,7 +645,8 @@ function parseCsvTodos(csvText) {
   const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   if (!lines.length) return [];
 
-  const hasHeader = normalize(lines[0]).includes("wo") && normalize(lines[0]).includes("tc");
+  const h = normalize(lines[0]);
+  const hasHeader = h.includes("wo") && h.includes("tc");
   const start = hasHeader ? 1 : 0;
 
   const out = [];
@@ -717,7 +703,6 @@ $("#importTodoInput").addEventListener("change", async (e) => {
   if (file.type === "text/csv" || file.name.toLowerCase().endsWith(".csv")) {
     items = parseCsvTodos(text);
   } else {
-    // JSON: either {todos:[...]} or [...]
     try {
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed)) items = parsed;
