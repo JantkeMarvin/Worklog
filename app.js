@@ -98,8 +98,12 @@ function uuid() {
   return (crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 }
 
-function normalize(s = "") {
+function normalizeLower(s = "") {
   return String(s).trim().toLowerCase();
+}
+
+function normalizeTrim(s = "") {
+  return String(s).trim();
 }
 
 function makeJobSearch(job) {
@@ -214,50 +218,95 @@ function deleteTodo(id) {
   });
 }
 
-// ---------- ToDo matching ----------
-function todoMatchesJob(todo, job) {
-  // category must match
-  if (todo.category && job.category && todo.category !== job.category) return false;
+// ---------- Similarity (Levenshtein ratio) ----------
+function similarityRatio(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
 
-  const jobWO = normalize(job.wo);
-  const jobTC = normalize(job.tc);
-  const jobPN = normalize(job.pn);
-  const jobAll = normalize(job.search || "");
+  // avoid heavy CPU for huge pastes
+  const A = String(a).slice(0, 2000);
+  const B = String(b).slice(0, 2000);
 
-  const tWO = normalize(todo.wo);
-  const tTC = normalize(todo.tc);
-  const tPN = normalize(todo.pn);
-  const tText = normalize(todo.text);
-  const todoAll = normalize(todo.search || "");
+  const m = A.length, n = B.length;
+  if (m === 0 || n === 0) return 0;
 
-  if (tWO && jobWO && !jobWO.includes(tWO)) return false;
-  if (tTC && jobTC && !jobTC.includes(tTC)) return false;
-  if (tPN && jobPN && !jobPN.includes(tPN)) return false;
-  if (tText && !jobAll.includes(tText)) return false;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
 
-  if (!tWO && !tTC && !tPN && !tText) return false;
+  for (let i = 1; i <= m; i++) {
+    const ca = A.charCodeAt(i - 1);
+    for (let j = 1; j <= n; j++) {
+      const cb = B.charCodeAt(j - 1);
+      const cost = (ca === cb) ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
 
-  if (todoAll && jobAll.includes(todoAll)) return true;
-  return true;
+  const dist = dp[m][n];
+  return 1 - dist / Math.max(m, n);
 }
 
+// ---------- ToDo matching (NEW RULE) ----------
+/*
+RULE:
+- Category must match (CLS/INT)
+- If Job has P/N:
+    -> P/N must match 100% (trim + case-insensitive)
+    -> AND Notes similarity >= 96% (job.text vs todo.text)
+- If Job has NO P/N:
+    -> Notes similarity >= 96% (job.text vs todo.text)
+Notes:
+- All characters are considered (no stripping)
+- Comparison is case-insensitive for similarity
+*/
+function todoMatchesJob(todo, job) {
+  const jobCat = (job.category || "CLS");
+  const todoCat = (todo.category || "CLS");
+  if (jobCat !== todoCat) return false;
+
+  const jobPN = normalizeLower(job.pn);
+  const todoPN = normalizeLower(todo.pn);
+
+  const jobNotes = normalizeLower(job.text);
+  const todoNotes = normalizeLower(todo.text);
+
+  const hasJobPN = !!jobPN;
+
+  // If job has PN: PN must match exactly AND notes similarity >= 0.96
+  if (hasJobPN) {
+    if (!todoPN) return false;
+    if (jobPN !== todoPN) return false;
+
+    if (!jobNotes || !todoNotes) return false;
+    return similarityRatio(jobNotes, todoNotes) >= 0.96;
+  }
+
+  // If job has no PN: only notes similarity >= 0.96
+  if (!jobNotes || !todoNotes) return false;
+  return similarityRatio(jobNotes, todoNotes) >= 0.96;
+}
+
+// ---------- Apply matching when saving a job ----------
 async function applyTodoMatchingForJob(job) {
   const todos = await getAllTodos();
   const openTodos = todos.filter(t => !t.done);
+
   const matched = openTodos.filter(t => todoMatchesJob(t, job));
 
   if (!matched.length) {
-    if (job.todoMatched) {
-      job.todoMatched = false;
-      job.matchedTodoIds = [];
-      job.search = makeJobSearch(job);
-      await putJob(job);
-    }
+    // keep old "match" flag if no longer matching? -> we DON'T auto-unmatch here
+    // because the user might have manually done items etc.
+    // We only set matches when found.
     return;
   }
 
   job.todoMatched = true;
-  job.matchedTodoIds = matched.map(t => t.id);
+  job.matchedTodoIds = Array.from(new Set([...(job.matchedTodoIds || []), ...matched.map(t => t.id)]));
   job.search = makeJobSearch(job);
   await putJob(job);
 
@@ -266,8 +315,37 @@ async function applyTodoMatchingForJob(job) {
     t.done = true;
     t.doneAt = now;
     t.matchedJobId = job.id;
+    t.search = makeTodoSearch(t);
     await putTodo(t);
   }
+}
+
+// ---------- Apply matching when saving a todo (fix order issue) ----------
+async function applyJobMatchingForTodo(todo) {
+  if (todo.done) return;
+
+  const jobs = await getAllJobs();
+
+  // only jobs in same category
+  const sameCatJobs = jobs.filter(j => (j.category || "CLS") === (todo.category || "CLS"));
+
+  // we want to find a job that matches this todo using the SAME rule:
+  // (todoMatchesJob(todo, job))
+  const hit = sameCatJobs.find(j => todoMatchesJob(todo, j));
+  if (!hit) return;
+
+  // mark todo done
+  todo.done = true;
+  todo.doneAt = Date.now();
+  todo.matchedJobId = hit.id;
+  todo.search = makeTodoSearch(todo);
+  await putTodo(todo);
+
+  // mark job matched
+  hit.todoMatched = true;
+  hit.matchedTodoIds = Array.from(new Set([...(hit.matchedTodoIds || []), todo.id]));
+  hit.search = makeJobSearch(hit);
+  await putJob(hit);
 }
 
 // ---------- UI state ----------
@@ -375,6 +453,7 @@ function bindTodoActions() {
       if (!t) return;
       t.done = true;
       t.doneAt = Date.now();
+      t.search = makeTodoSearch(t);
       await putTodo(t);
       setStatus("Marked done.");
       render();
@@ -533,7 +612,7 @@ async function renderSearch() {
   const results = $("#results");
 
   function doSearch() {
-    const q = normalize(input.value);
+    const q = normalizeLower(input.value);
     if (!q) {
       results.innerHTML = `<p class="muted">Type to search.</p>`;
       return;
@@ -614,7 +693,7 @@ async function renderTodo() {
 
       <p class="smallnote" style="margin-top:10px;">
         Auto match: When you save a job, the app checks OPEN ToDos with the same category (CLS/INT).
-        If it matches (even partially), the job turns green and the ToDo becomes DONE.
+        If it matches, the job turns green and the ToDo becomes DONE.
       </p>
     </div>
 
@@ -646,6 +725,8 @@ async function renderTodo() {
       return;
     }
 
+    // For the new rule, matching is based on PN + Notes.
+    // But we still require at least ONE field to avoid empty spam.
     if (!todo.wo && !todo.tc && !todo.pn && !todo.text) {
       setStatus("Please fill at least one field.");
       return;
@@ -653,6 +734,10 @@ async function renderTodo() {
 
     todo.search = makeTodoSearch(todo);
     await putTodo(todo);
+
+    // IMPORTANT: fix order issue (todo after job)
+    await applyJobMatchingForTodo(todo);
+
     setStatus("ToDo added.");
     renderTodo();
   };
@@ -732,6 +817,8 @@ function renderForm(existing = null) {
 
     job.search = makeJobSearch(job);
     await putJob(job);
+
+    // IMPORTANT: apply matching (job after todo)
     await applyTodoMatchingForJob(job);
 
     setStatus(isEdit ? "Saved." : "Created.");
@@ -800,7 +887,7 @@ function parseCsvTodos(csvText) {
   // If first column is not CLS/INT -> old format wo,tc,pn,text (defaults category CLS)
   const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   if (!lines.length) return [];
-  const first = normalize(lines[0]);
+  const first = normalizeLower(lines[0]);
   const hasHeader = first.includes("wo") && first.includes("tc");
   const start = hasHeader ? 1 : 0;
 
@@ -832,7 +919,7 @@ function parseCsvTodos(csvText) {
 
 async function importTodos(items) {
   const existing = await getAllTodos();
-  const existingKeys = new Set(existing.map(t => normalize(t.search || "")));
+  const existingKeys = new Set(existing.map(t => normalizeLower(t.search || "")));
   const now = Date.now();
   let added = 0;
 
@@ -854,11 +941,15 @@ async function importTodos(items) {
     if (!todo.wo && !todo.tc && !todo.pn && !todo.text) continue;
 
     todo.search = makeTodoSearch(todo);
-    const key = normalize(todo.search);
+    const key = normalizeLower(todo.search);
     if (key && existingKeys.has(key)) continue;
     existingKeys.add(key);
 
     await putTodo(todo);
+
+    // apply matching for imported todos too
+    await applyJobMatchingForTodo(todo);
+
     added++;
   }
   return added;
@@ -888,6 +979,7 @@ if ($("#restoreInput")) $("#restoreInput").addEventListener("change", async (e) 
   await restoreFromJsonText(text);
 });
 
+// (Import ToDo button is only in some versions of the UI; keep safe)
 if ($("#importTodoBtn")) $("#importTodoBtn").onclick = () => {
   $("#importTodoInput").value = "";
   $("#importTodoInput").click();
